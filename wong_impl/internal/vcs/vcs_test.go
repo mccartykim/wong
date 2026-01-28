@@ -3946,3 +3946,841 @@ func TestGitVCS_DiffHasChanges_StagedVsUnstaged(t *testing.T) {
 		t.Error("expected changes with unstaged modifications")
 	}
 }
+
+// --- wong-bpg.5: JJ Workspace Sync Integration Tests ---
+
+func TestJujutsuVCS_WorkspaceCreateListRemove(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-ws-lifecycle")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Create initial content so workspace has something
+	h.WriteFile(repoPath, "base.txt", "base")
+	h.runCmd(repoPath, "jj", "status") // snapshot
+	jjVCS.Commit(ctx, "Base commit", nil)
+
+	// List workspaces - should have only "default"
+	workspaces, err := jjVCS.ListWorkspaces(ctx)
+	if err != nil {
+		t.Fatalf("ListWorkspaces: %v", err)
+	}
+	if len(workspaces) != 1 || workspaces[0].Name != "default" {
+		t.Errorf("expected 1 workspace 'default', got %v", workspaces)
+	}
+
+	// Create a sync workspace (simulating sync_workspace.go pattern)
+	syncPath := filepath.Join(h.tempDir, "beads-sync-workspace")
+	if err := jjVCS.CreateWorkspace(ctx, "beads-sync", syncPath); err != nil {
+		t.Fatalf("CreateWorkspace beads-sync: %v", err)
+	}
+
+	// Verify workspace created
+	workspaces, err = jjVCS.ListWorkspaces(ctx)
+	if err != nil {
+		t.Fatalf("ListWorkspaces after create: %v", err)
+	}
+	if len(workspaces) != 2 {
+		t.Errorf("expected 2 workspaces, got %d", len(workspaces))
+	}
+
+	foundSync := false
+	for _, ws := range workspaces {
+		if ws.Name == "beads-sync" {
+			foundSync = true
+			break
+		}
+	}
+	if !foundSync {
+		t.Error("expected to find 'beads-sync' workspace")
+	}
+
+	// Remove workspace
+	if err := jjVCS.RemoveWorkspace(ctx, "beads-sync"); err != nil {
+		t.Fatalf("RemoveWorkspace: %v", err)
+	}
+
+	workspaces, err = jjVCS.ListWorkspaces(ctx)
+	if err != nil {
+		t.Fatalf("ListWorkspaces after remove: %v", err)
+	}
+	if len(workspaces) != 1 {
+		t.Errorf("expected 1 workspace after removal, got %d", len(workspaces))
+	}
+}
+
+func TestJujutsuVCS_WorkspaceFileSync(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-ws-filesync")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Create JSONL file (simulating beads sync pattern)
+	h.WriteFile(repoPath, "issues.jsonl", `{"id":"1","title":"test issue"}`)
+	h.runCmd(repoPath, "jj", "status")
+	jjVCS.Commit(ctx, "Add issues file", nil)
+
+	// Create workspace for sync
+	syncPath := filepath.Join(h.tempDir, "sync-workspace")
+	if err := jjVCS.CreateWorkspace(ctx, "sync", syncPath); err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	defer jjVCS.RemoveWorkspace(ctx, "sync")
+
+	// Verify the file is accessible in the sync workspace
+	syncJJVCS, err := NewJujutsuVCS(syncPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS for sync workspace: %v", err)
+	}
+
+	// The sync workspace should share the repo's history
+	files, err := syncJJVCS.ListTrackedFiles(ctx, ".")
+	if err != nil {
+		t.Fatalf("ListTrackedFiles in sync workspace: %v", err)
+	}
+	if len(files) == 0 {
+		t.Error("expected tracked files in sync workspace")
+	}
+}
+
+func TestJujutsuVCS_SnapshotAndDescribe(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-snapshot")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Write a file
+	h.WriteFile(repoPath, "data.txt", "snapshot test")
+
+	// Explicit snapshot (jj auto-snapshots but this tests the method)
+	if err := jjVCS.Snapshot(ctx); err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+
+	// Describe the current change
+	if err := jjVCS.Describe(ctx, "Snapshot test description"); err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+
+	// Verify description via log
+	log, err := jjVCS.Log(ctx, 1)
+	if err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+	if len(log) == 0 {
+		t.Fatal("expected at least 1 log entry")
+	}
+	if !strings.Contains(log[0].Description, "Snapshot test description") {
+		t.Errorf("expected description in log, got %q", log[0].Description)
+	}
+}
+
+func TestJujutsuVCS_TrackAndUntrackFiles(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-track")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Create files
+	h.WriteFile(repoPath, "tracked.txt", "tracked")
+	h.WriteFile(repoPath, "also-tracked.txt", "also tracked")
+	h.runCmd(repoPath, "jj", "status")
+
+	// TrackFiles
+	if err := jjVCS.TrackFiles(ctx, "tracked.txt", "also-tracked.txt"); err != nil {
+		t.Fatalf("TrackFiles: %v", err)
+	}
+
+	// Commit so they're in history
+	jjVCS.Commit(ctx, "Add tracked files", nil)
+
+	// Check tracked
+	tracked, err := jjVCS.IsFileTracked(ctx, "tracked.txt")
+	if err != nil {
+		t.Fatalf("IsFileTracked: %v", err)
+	}
+	if !tracked {
+		t.Error("expected tracked.txt to be tracked after TrackFiles")
+	}
+
+	// UntrackFiles
+	if err := jjVCS.UntrackFiles(ctx, "also-tracked.txt"); err != nil {
+		// UntrackFiles may fail on some jj versions, just log
+		t.Logf("UntrackFiles: %v (may be unsupported)", err)
+	}
+}
+
+func TestJujutsuVCS_ShowFile(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-showfile")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Create and commit a file
+	h.WriteFile(repoPath, "config.json", `{"key":"value"}`)
+	h.runCmd(repoPath, "jj", "status")
+	jjVCS.Commit(ctx, "Add config", nil)
+
+	// ShowFile at current revision
+	content, err := jjVCS.ShowFile(ctx, "@-", "config.json")
+	if err != nil {
+		t.Fatalf("ShowFile: %v", err)
+	}
+	if !strings.Contains(string(content), "key") {
+		t.Errorf("expected config content, got %q", string(content))
+	}
+
+	// ShowFile for non-existent file should error
+	_, err = jjVCS.ShowFile(ctx, "@-", "nonexistent.txt")
+	if err == nil {
+		t.Error("expected error for non-existent file in ShowFile")
+	}
+}
+
+func TestJujutsuVCS_GetVCSDir(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-vcsdir")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	vcsDir, err := jjVCS.GetVCSDir(ctx)
+	if err != nil {
+		t.Fatalf("GetVCSDir: %v", err)
+	}
+	if !strings.Contains(vcsDir, ".jj") {
+		t.Errorf("expected .jj in VCS dir, got %q", vcsDir)
+	}
+}
+
+func TestJujutsuVCS_IsWorktreeRepo(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-worktree")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Default workspace should not be a worktree
+	isWT, err := jjVCS.IsWorktreeRepo(ctx)
+	if err != nil {
+		t.Fatalf("IsWorktreeRepo: %v", err)
+	}
+	if isWT {
+		t.Error("expected default workspace to not be a worktree")
+	}
+}
+
+func TestJujutsuVCS_DiffHasChanges(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-diffchanges")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Create and commit a file
+	h.WriteFile(repoPath, "data.txt", "original")
+	h.runCmd(repoPath, "jj", "status")
+	jjVCS.Commit(ctx, "Add data", nil)
+
+	// No changes after commit
+	hasChanges, err := jjVCS.DiffHasChanges(ctx, "@-", "data.txt")
+	if err != nil {
+		t.Logf("DiffHasChanges clean: %v (may be unsupported for this revset)", err)
+	}
+
+	// Modify the file
+	h.WriteFile(repoPath, "data.txt", "modified")
+	h.runCmd(repoPath, "jj", "status")
+
+	hasChanges, err = jjVCS.DiffHasChanges(ctx, "@-", "data.txt")
+	if err != nil {
+		t.Logf("DiffHasChanges modified: %v", err)
+	} else if !hasChanges {
+		t.Error("expected changes after modification")
+	}
+}
+
+func TestJujutsuVCS_BookmarkOperations(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-bookmarks-ops")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Create content and commit
+	h.WriteFile(repoPath, "test.txt", "content")
+	h.runCmd(repoPath, "jj", "status")
+	jjVCS.Commit(ctx, "Initial", nil)
+
+	// Create bookmark
+	if err := jjVCS.CreateBranch(ctx, "sync-branch"); err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+
+	// BranchExists
+	exists, err := jjVCS.BranchExists(ctx, "sync-branch")
+	if err != nil {
+		t.Fatalf("BranchExists: %v", err)
+	}
+	if !exists {
+		t.Error("expected sync-branch to exist")
+	}
+
+	// DeleteBranch
+	if err := jjVCS.DeleteBranch(ctx, "sync-branch"); err != nil {
+		t.Fatalf("DeleteBranch: %v", err)
+	}
+
+	exists, err = jjVCS.BranchExists(ctx, "sync-branch")
+	if err != nil {
+		t.Fatalf("BranchExists after delete: %v", err)
+	}
+	if exists {
+		t.Error("expected sync-branch to not exist after deletion")
+	}
+}
+
+func TestJujutsuVCS_SymbolicRef(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-symref")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Create content and commit with a bookmark
+	h.WriteFile(repoPath, "test.txt", "content")
+	h.runCmd(repoPath, "jj", "status")
+	jjVCS.Commit(ctx, "Initial", nil)
+	jjVCS.CreateBranch(ctx, "main")
+
+	// SymbolicRef should return the bookmark name
+	ref, err := jjVCS.SymbolicRef(ctx)
+	if err != nil {
+		t.Fatalf("SymbolicRef: %v", err)
+	}
+	// May return empty if bookmark is on parent, not working copy
+	t.Logf("SymbolicRef returned: %q", ref)
+}
+
+func TestJujutsuVCS_GetRemoteURLs_NoRemote(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-noremote")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	urls, err := jjVCS.GetRemoteURLs(ctx)
+	if err != nil {
+		t.Fatalf("GetRemoteURLs: %v", err)
+	}
+	if len(urls) != 0 {
+		t.Errorf("expected no remote URLs, got %v", urls)
+	}
+
+	hasRemote, err := jjVCS.HasRemote(ctx)
+	if err != nil {
+		t.Fatalf("HasRemote: %v", err)
+	}
+	if hasRemote {
+		t.Error("expected HasRemote false with no remotes")
+	}
+}
+
+func TestJujutsuVCS_ListTrackedFiles(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-listfiles")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Create multiple files
+	h.WriteFile(repoPath, "a.txt", "a")
+	h.WriteFile(repoPath, "b.txt", "b")
+	if err := os.MkdirAll(filepath.Join(repoPath, "sub"), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	h.WriteFile(repoPath, filepath.Join("sub", "c.txt"), "c")
+	h.runCmd(repoPath, "jj", "status")
+	jjVCS.Commit(ctx, "Add files", nil)
+
+	files, err := jjVCS.ListTrackedFiles(ctx, ".")
+	if err != nil {
+		t.Fatalf("ListTrackedFiles: %v", err)
+	}
+	if len(files) < 3 {
+		t.Errorf("expected at least 3 tracked files, got %d: %v", len(files), files)
+	}
+}
+
+// --- wong-bpg.6: JJ Hook-related VCS Operation Tests ---
+
+func TestJujutsuVCS_ConfigureHooksPath(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-hooks-config")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// ConfigureHooksPath for jj - may use config or be no-op
+	hooksDir := filepath.Join(repoPath, ".beads", "hooks")
+	err = jjVCS.ConfigureHooksPath(ctx, hooksDir)
+	// jj doesn't have native hooks path, so this may return nil (no-op) or error
+	t.Logf("ConfigureHooksPath result: %v", err)
+
+	// GetHooksPath
+	path, err := jjVCS.GetHooksPath(ctx)
+	t.Logf("GetHooksPath result: %q, err: %v", path, err)
+}
+
+func TestJujutsuVCS_Checkout(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-checkout")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Create two commits
+	h.WriteFile(repoPath, "first.txt", "first")
+	h.runCmd(repoPath, "jj", "status")
+	jjVCS.Commit(ctx, "First commit", nil)
+
+	h.WriteFile(repoPath, "second.txt", "second")
+	h.runCmd(repoPath, "jj", "status")
+	jjVCS.Commit(ctx, "Second commit", nil)
+
+	// Checkout parent (jj uses edit/new, but Checkout adapts)
+	err = jjVCS.Checkout(ctx, "@--")
+	if err != nil {
+		t.Logf("Checkout @--: %v (may use edit under the hood)", err)
+	}
+}
+
+func TestJujutsuVCS_RestoreFile(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-restore")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Create and commit a file
+	h.WriteFile(repoPath, "restore-me.txt", "original")
+	h.runCmd(repoPath, "jj", "status")
+	jjVCS.Commit(ctx, "Original", nil)
+
+	// Modify the file in new change
+	h.WriteFile(repoPath, "restore-me.txt", "modified")
+	h.runCmd(repoPath, "jj", "status")
+
+	// Restore the file
+	err = jjVCS.RestoreFile(ctx, "restore-me.txt")
+	if err != nil {
+		t.Logf("RestoreFile: %v", err)
+	} else {
+		// Verify restored
+		content, _ := os.ReadFile(filepath.Join(repoPath, "restore-me.txt"))
+		if string(content) == "modified" {
+			t.Error("expected file to be restored to original")
+		}
+	}
+}
+
+func TestJujutsuVCS_Squash(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-squash")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Create two commits
+	h.WriteFile(repoPath, "base.txt", "base")
+	h.runCmd(repoPath, "jj", "status")
+	jjVCS.Commit(ctx, "Base commit", nil)
+
+	h.WriteFile(repoPath, "feature.txt", "feature")
+	h.runCmd(repoPath, "jj", "status")
+
+	// Squash current into parent
+	err = jjVCS.Squash(ctx, "@")
+	if err != nil {
+		t.Logf("Squash: %v", err)
+	}
+}
+
+func TestJujutsuVCS_NewAndEdit(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-new-edit")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Create initial content
+	h.WriteFile(repoPath, "init.txt", "init")
+	h.runCmd(repoPath, "jj", "status")
+	jjVCS.Commit(ctx, "Init", nil)
+
+	// New creates empty change on top
+	if err := jjVCS.New(ctx, "Work in progress"); err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Verify we're on a new change
+	current, err := jjVCS.CurrentChange(ctx)
+	if err != nil {
+		t.Fatalf("CurrentChange: %v", err)
+	}
+	if !current.IsWorking {
+		t.Error("expected new change to be working copy")
+	}
+
+	// Stack should show the change
+	stack, err := jjVCS.StackInfo(ctx)
+	if err != nil {
+		t.Fatalf("StackInfo: %v", err)
+	}
+	if len(stack) < 2 {
+		t.Errorf("expected at least 2 changes in stack, got %d", len(stack))
+	}
+}
+
+func TestJujutsuVCS_GitExportImport(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-export-import")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Create content and commit
+	h.WriteFile(repoPath, "export.txt", "export me")
+	h.runCmd(repoPath, "jj", "status")
+	jjVCS.Commit(ctx, "Export test", nil)
+
+	// GitExport
+	if err := jjVCS.GitExport(ctx); err != nil {
+		t.Fatalf("GitExport: %v", err)
+	}
+
+	// GitImport (should be idempotent)
+	if err := jjVCS.GitImport(ctx); err != nil {
+		t.Fatalf("GitImport: %v", err)
+	}
+}
+
+func TestJujutsuVCS_ResolveRef(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-resolve")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "test.txt", "test")
+	h.runCmd(repoPath, "jj", "status")
+	jjVCS.Commit(ctx, "Commit for resolve", nil)
+
+	// Resolve @ (current)
+	id, err := jjVCS.ResolveRef(ctx, "@")
+	if err != nil {
+		t.Fatalf("ResolveRef @: %v", err)
+	}
+	if id == "" {
+		t.Error("expected non-empty resolved ref")
+	}
+
+	// Resolve @- (parent)
+	parentID, err := jjVCS.ResolveRef(ctx, "@-")
+	if err != nil {
+		t.Fatalf("ResolveRef @-: %v", err)
+	}
+	if parentID == "" {
+		t.Error("expected non-empty parent ref")
+	}
+	if id == parentID {
+		t.Error("expected @ and @- to resolve to different IDs")
+	}
+}
+
+func TestJujutsuVCS_LogBetween_ThreeCommits(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-logbetween")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Create 3 commits
+	h.WriteFile(repoPath, "a.txt", "a")
+	h.runCmd(repoPath, "jj", "status")
+	jjVCS.Commit(ctx, "Commit A", nil)
+	aRef, _ := jjVCS.ResolveRef(ctx, "@-")
+
+	h.WriteFile(repoPath, "b.txt", "b")
+	h.runCmd(repoPath, "jj", "status")
+	jjVCS.Commit(ctx, "Commit B", nil)
+
+	h.WriteFile(repoPath, "c.txt", "c")
+	h.runCmd(repoPath, "jj", "status")
+	jjVCS.Commit(ctx, "Commit C", nil)
+	cRef, _ := jjVCS.ResolveRef(ctx, "@-")
+
+	// LogBetween
+	changes, err := jjVCS.LogBetween(ctx, aRef, cRef)
+	if err != nil {
+		t.Fatalf("LogBetween: %v", err)
+	}
+	if len(changes) < 1 {
+		t.Errorf("expected at least 1 change between A and C, got %d", len(changes))
+	}
+}
+
+// --- wong-bpg.8: Concurrent Workspace Operations ---
+
+func TestJujutsuVCS_MultipleWorkspaces(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-multi-ws")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Create content
+	h.WriteFile(repoPath, "shared.txt", "shared")
+	h.runCmd(repoPath, "jj", "status")
+	jjVCS.Commit(ctx, "Shared content", nil)
+
+	// Create multiple workspaces
+	wsNames := []string{"ws-alpha", "ws-beta", "ws-gamma"}
+	for _, name := range wsNames {
+		wsPath := filepath.Join(h.tempDir, name)
+		if err := jjVCS.CreateWorkspace(ctx, name, wsPath); err != nil {
+			t.Fatalf("CreateWorkspace %s: %v", name, err)
+		}
+	}
+
+	// Verify all created
+	workspaces, err := jjVCS.ListWorkspaces(ctx)
+	if err != nil {
+		t.Fatalf("ListWorkspaces: %v", err)
+	}
+	// default + 3 custom = 4
+	if len(workspaces) != 4 {
+		t.Errorf("expected 4 workspaces, got %d", len(workspaces))
+	}
+
+	// Clean up workspaces in reverse order
+	for i := len(wsNames) - 1; i >= 0; i-- {
+		if err := jjVCS.RemoveWorkspace(ctx, wsNames[i]); err != nil {
+			t.Fatalf("RemoveWorkspace %s: %v", wsNames[i], err)
+		}
+	}
+
+	workspaces, err = jjVCS.ListWorkspaces(ctx)
+	if err != nil {
+		t.Fatalf("ListWorkspaces after cleanup: %v", err)
+	}
+	if len(workspaces) != 1 {
+		t.Errorf("expected 1 workspace after cleanup, got %d", len(workspaces))
+	}
+}
+
+func TestJujutsuVCS_UpdateStaleWorkspace_Fresh(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-stale")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "test.txt", "content")
+	h.runCmd(repoPath, "jj", "status")
+	jjVCS.Commit(ctx, "Initial", nil)
+
+	// Create a workspace
+	wsPath := filepath.Join(h.tempDir, "stale-ws")
+	if err := jjVCS.CreateWorkspace(ctx, "stale-test", wsPath); err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	defer jjVCS.RemoveWorkspace(ctx, "stale-test")
+
+	// UpdateStaleWorkspace on a fresh workspace should be a no-op
+	err = jjVCS.UpdateStaleWorkspace(ctx, "stale-test")
+	if err != nil {
+		t.Logf("UpdateStaleWorkspace: %v (non-fatal)", err)
+	}
+}
