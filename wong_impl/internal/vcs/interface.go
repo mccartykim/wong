@@ -243,6 +243,35 @@ type VCS interface {
 	// Clean removes untracked files from the working copy.
 	Clean(ctx context.Context) error
 
+	// --- Phase 2: Sync-branch worktree/workspace operations ---
+
+	// LogBetween returns commits/changes in 'to' that are not in 'from'.
+	// Equivalent to 'git log --oneline from..to'.
+	LogBetween(ctx context.Context, from, to string) ([]ChangeInfo, error)
+
+	// DiffPath returns the diff of a specific file between two refs.
+	// Equivalent to 'git diff from...to -- path'.
+	DiffPath(ctx context.Context, from, to, path string) (string, error)
+
+	// HasStagedChanges returns true if there are staged changes ready to commit.
+	// For jj, this checks if the working copy has modifications.
+	HasStagedChanges(ctx context.Context) (bool, error)
+
+	// StageAndCommit stages specific files and commits them atomically.
+	// For jj, this snapshots and describes the current change.
+	StageAndCommit(ctx context.Context, paths []string, message string, opts *CommitOptions) error
+
+	// PushWithUpstream pushes a branch with --set-upstream behavior.
+	PushWithUpstream(ctx context.Context, remote, branch string) error
+
+	// Rebase rebases the current branch onto the given ref.
+	// For jj: jj rebase -d ref. For git: git rebase ref.
+	Rebase(ctx context.Context, onto string) error
+
+	// RebaseAbort aborts a rebase in progress.
+	// For jj: no-op (jj handles conflicts inline). For git: git rebase --abort.
+	RebaseAbort(ctx context.Context) error
+
 	// --- Stack Navigation ---
 
 	// Next moves to the next (child) change in the stack.

@@ -529,3 +529,197 @@ func vcsGetDefaultBranchForRemote(ctx context.Context, remote string) string {
 	}
 	return branch
 }
+
+// vcsFileStatusUnmodified returns the FileStatusUnmodified constant.
+// Helper for callers that compare status without importing vcs package directly.
+func vcsFileStatusUnmodified() vcs.FileStatus {
+	return vcs.FileStatusUnmodified
+}
+
+// --- Phase 2: Sync-branch worktree/workspace operations ---
+// These functions abstract the git worktree operations used in
+// sync_branch.go and daemon_sync_branch.go for VCS-agnostic use.
+
+// vcsGetContextForPath returns a VCSContext for an arbitrary directory.
+// Used for operating on worktrees/workspaces separate from the main repo.
+func vcsGetContextForPath(path string) (*beads.VCSContext, error) {
+	return beads.GetVCSContextForPath(path)
+}
+
+// vcsLogBetween returns changes in 'to' not in 'from'.
+// Replacement for: rc.GitCmd(ctx, "log", "--oneline", from+".."+to)
+func vcsLogBetween(ctx context.Context, from, to string) ([]vcs.ChangeInfo, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return nil, fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsLogBetween(ctx, from, to)
+}
+
+// vcsDiffPath returns the diff of a specific file between two refs.
+// Replacement for: rc.GitCmd(ctx, "diff", from+"..."+to, "--", path)
+func vcsDiffPath(ctx context.Context, from, to, path string) (string, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return "", fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsDiffPath(ctx, from, to, path)
+}
+
+// vcsHasStagedChanges returns true if there are staged/pending changes.
+// Replacement for: rc.GitCmd(ctx, "diff", "--cached", "--quiet")
+func vcsHasStagedChanges(ctx context.Context) (bool, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return false, fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsHasStagedChanges(ctx)
+}
+
+// vcsStageAndCommit stages files and commits atomically.
+// Replacement for git add + git commit sequences in sync_branch.go.
+func vcsStageAndCommit(ctx context.Context, paths []string, message string) error {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return fmt.Errorf("getting VCS context: %w", err)
+	}
+	opts := &vcs.CommitOptions{NoGPGSign: true, Paths: paths}
+	return vc.VcsStageAndCommit(ctx, paths, message, opts)
+}
+
+// vcsPushWithUpstream pushes with --set-upstream behavior.
+// Replacement for: exec.Command("git", "-C", path, "push", "--set-upstream", remote, branch)
+func vcsPushWithUpstream(ctx context.Context, remote, branch string) error {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsPushWithUpstream(ctx, remote, branch)
+}
+
+// vcsRebase rebases current branch onto the given ref.
+// Replacement for: exec.Command("git", "-C", path, "rebase", ref)
+func vcsRebase(ctx context.Context, onto string) error {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsRebase(ctx, onto)
+}
+
+// vcsRebaseAbort aborts a rebase in progress.
+// Replacement for: exec.Command("git", "-C", path, "rebase", "--abort")
+func vcsRebaseAbort(ctx context.Context) error {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsRebaseAbort(ctx)
+}
+
+// --- Path-aware worktree operations (operate on specific directory) ---
+
+// vcsWorktreeStatus checks file status in a worktree/workspace.
+// Replacement for: exec.Command("git", "-C", worktreePath, "status", "--porcelain", relPath)
+func vcsWorktreeStatus(ctx context.Context, worktreePath, filePath string) (*vcs.StatusEntry, error) {
+	vc, err := vcsGetContextForPath(worktreePath)
+	if err != nil {
+		return nil, fmt.Errorf("VCS context for %s: %w", worktreePath, err)
+	}
+	return vc.VCS.StatusPath(ctx, filePath)
+}
+
+// vcsWorktreeStageAndCommit stages and commits in a worktree/workspace.
+// Replacement for: exec.Command("git", "-C", worktreePath, "add" + "commit")
+func vcsWorktreeStageAndCommit(ctx context.Context, worktreePath string, paths []string, message string) error {
+	vc, err := vcsGetContextForPath(worktreePath)
+	if err != nil {
+		return fmt.Errorf("VCS context for %s: %w", worktreePath, err)
+	}
+	opts := &vcs.CommitOptions{NoGPGSign: true, Paths: paths}
+	return vc.VCS.StageAndCommit(ctx, paths, message, opts)
+}
+
+// vcsWorktreePush pushes from a worktree/workspace with upstream tracking.
+// Replacement for: exec.Command("git", "-C", worktreePath, "push", "--set-upstream", remote, branch)
+func vcsWorktreePush(ctx context.Context, worktreePath, remote, branch string) error {
+	vc, err := vcsGetContextForPath(worktreePath)
+	if err != nil {
+		return fmt.Errorf("VCS context for %s: %w", worktreePath, err)
+	}
+	return vc.VCS.PushWithUpstream(ctx, remote, branch)
+}
+
+// vcsWorktreePull pulls into a worktree/workspace.
+// Replacement for: exec.Command("git", "-C", worktreePath, "pull", remote, branch)
+func vcsWorktreePull(ctx context.Context, worktreePath, remote, branch string) error {
+	vc, err := vcsGetContextForPath(worktreePath)
+	if err != nil {
+		return fmt.Errorf("VCS context for %s: %w", worktreePath, err)
+	}
+	return vc.VCS.Pull(ctx, remote, branch)
+}
+
+// vcsWorktreeRebase rebases in a worktree/workspace.
+// Replacement for: exec.Command("git", "-C", worktreePath, "rebase", ref)
+func vcsWorktreeRebase(ctx context.Context, worktreePath, onto string) error {
+	vc, err := vcsGetContextForPath(worktreePath)
+	if err != nil {
+		return fmt.Errorf("VCS context for %s: %w", worktreePath, err)
+	}
+	return vc.VCS.Rebase(ctx, onto)
+}
+
+// vcsWorktreeRebaseAbort aborts a rebase in a worktree/workspace.
+// Replacement for: exec.Command("git", "-C", worktreePath, "rebase", "--abort")
+func vcsWorktreeRebaseAbort(ctx context.Context, worktreePath string) error {
+	vc, err := vcsGetContextForPath(worktreePath)
+	if err != nil {
+		return fmt.Errorf("VCS context for %s: %w", worktreePath, err)
+	}
+	return vc.VCS.RebaseAbort(ctx)
+}
+
+// vcsWorktreeGetConfig reads VCS config in a worktree/workspace.
+// Replacement for: exec.Command("git", "-C", worktreePath, "config", "--get", key)
+func vcsWorktreeGetConfig(ctx context.Context, worktreePath, key string) (string, error) {
+	vc, err := vcsGetContextForPath(worktreePath)
+	if err != nil {
+		return "", fmt.Errorf("VCS context for %s: %w", worktreePath, err)
+	}
+	return vc.VCS.GetConfig(ctx, key)
+}
+
+// vcsWorktreeFetch fetches in a worktree/workspace.
+// Replacement for: exec.Command("git", "-C", worktreePath, "fetch", remote, branch)
+func vcsWorktreeFetch(ctx context.Context, worktreePath, remote, branch string) error {
+	vc, err := vcsGetContextForPath(worktreePath)
+	if err != nil {
+		return fmt.Errorf("VCS context for %s: %w", worktreePath, err)
+	}
+	return vc.VCS.Fetch(ctx, remote, branch)
+}
+
+// vcsWorktreeHasRemote checks if a worktree/workspace has a remote configured.
+// Replacement for: exec.Command("git", "-C", worktreePath, "remote")
+func vcsWorktreeHasRemote(ctx context.Context, worktreePath string) bool {
+	vc, err := vcsGetContextForPath(worktreePath)
+	if err != nil {
+		return false
+	}
+	has, err := vc.VCS.HasRemote(ctx)
+	if err != nil {
+		return false
+	}
+	return has
+}
+
+// vcsGetRepoRoot returns the repo root for a given path.
+// Replacement for: exec.Command("git", "-C", path, "rev-parse", "--show-toplevel")
+func vcsGetRepoRoot(path string) (string, error) {
+	vc, err := vcsGetContextForPath(path)
+	if err != nil {
+		return "", err
+	}
+	return vc.VCS.RepoRoot(), nil
+}

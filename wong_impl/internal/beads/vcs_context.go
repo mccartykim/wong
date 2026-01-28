@@ -67,6 +67,25 @@ func GetVCSContext() (*VCSContext, error) {
 	}, nil
 }
 
+// GetVCSContextForPath returns a VCSContext for an arbitrary directory path.
+// This is used for operating on worktrees/workspaces that are separate from
+// the main repo (e.g., sync-branch worktrees, parallel task workspaces).
+func GetVCSContextForPath(path string) (*VCSContext, error) {
+	vcsInstance, err := vcs.DetectVCS(path)
+	if err != nil {
+		return nil, fmt.Errorf("no VCS detected at %s: %w", path, err)
+	}
+
+	colocated, _ := vcs.IsColocatedRepo(path)
+
+	return &VCSContext{
+		RepoContext:     nil, // No RepoContext for external paths
+		VCS:             vcsInstance,
+		VCSType:         vcsInstance.Type(),
+		IsColocatedRepo: colocated,
+	}, nil
+}
+
 // VcsCmd creates an exec.Cmd for the detected VCS (git or jj).
 // This is the VCS-agnostic replacement for GitCmd.
 //
@@ -286,6 +305,43 @@ func (vc *VCSContext) MigrateFromGitCmd(ctx context.Context, args ...string) *ex
 	}
 	// For git repos, use GitCmd directly
 	return vc.GitCmd(ctx, args...)
+}
+
+// --- Phase 2: Sync-branch worktree/workspace wrappers ---
+
+// VcsLogBetween returns commits/changes in 'to' not in 'from'.
+func (vc *VCSContext) VcsLogBetween(ctx context.Context, from, to string) ([]vcs.ChangeInfo, error) {
+	return vc.VCS.LogBetween(ctx, from, to)
+}
+
+// VcsDiffPath returns the diff of a specific file between two refs.
+func (vc *VCSContext) VcsDiffPath(ctx context.Context, from, to, path string) (string, error) {
+	return vc.VCS.DiffPath(ctx, from, to, path)
+}
+
+// VcsHasStagedChanges returns true if there are staged/pending changes.
+func (vc *VCSContext) VcsHasStagedChanges(ctx context.Context) (bool, error) {
+	return vc.VCS.HasStagedChanges(ctx)
+}
+
+// VcsStageAndCommit stages files and commits atomically.
+func (vc *VCSContext) VcsStageAndCommit(ctx context.Context, paths []string, message string, opts *vcs.CommitOptions) error {
+	return vc.VCS.StageAndCommit(ctx, paths, message, opts)
+}
+
+// VcsPushWithUpstream pushes with --set-upstream behavior.
+func (vc *VCSContext) VcsPushWithUpstream(ctx context.Context, remote, branch string) error {
+	return vc.VCS.PushWithUpstream(ctx, remote, branch)
+}
+
+// VcsRebase rebases the current branch onto the given ref.
+func (vc *VCSContext) VcsRebase(ctx context.Context, onto string) error {
+	return vc.VCS.Rebase(ctx, onto)
+}
+
+// VcsRebaseAbort aborts a rebase in progress.
+func (vc *VCSContext) VcsRebaseAbort(ctx context.Context) error {
+	return vc.VCS.RebaseAbort(ctx)
 }
 
 // mapGitToJJ translates common git commands to jj equivalents.

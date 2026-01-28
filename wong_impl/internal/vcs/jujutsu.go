@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -869,6 +870,81 @@ func (j *JujutsuVCS) UntrackFiles(ctx context.Context, paths ...string) error {
 	return err
 }
 
+// --- Phase 2: Sync-branch worktree/workspace operations ---
+
+// LogBetween returns changes in 'to' that are not in 'from'.
+// Uses jj revset: 'to ~ from' (commits in to but not in from).
+func (j *JujutsuVCS) LogBetween(ctx context.Context, from, to string) ([]ChangeInfo, error) {
+	revset := fmt.Sprintf("(%s) ~ (%s)", to, from)
+	output, err := j.runJJ(ctx, "log", "--no-graph", "-r", revset,
+		"-T", `change_id ++ "\x00" ++ change_id.shortest(8) ++ "\x00" ++ description.first_line() ++ "\x00" ++ author.name() ++ "\x00" ++ author.timestamp() ++ "\n"`)
+	if err != nil {
+		return nil, err
+	}
+
+	var changes []ChangeInfo
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\x00", 6)
+		if len(parts) < 5 {
+			continue
+		}
+		changes = append(changes, ChangeInfo{
+			ID:          strings.TrimSpace(parts[0]),
+			ShortID:     strings.TrimSpace(parts[1]),
+			Description: strings.TrimSpace(parts[2]),
+			Author:      strings.TrimSpace(parts[3]),
+			Timestamp:   strings.TrimSpace(parts[4]),
+		})
+	}
+	return changes, nil
+}
+
+// DiffPath returns the diff of a specific file between two refs.
+func (j *JujutsuVCS) DiffPath(ctx context.Context, from, to, path string) (string, error) {
+	args := []string{"diff", "--from", from, "--to", to}
+	if path != "" {
+		args = append(args, path)
+	}
+	return j.runJJ(ctx, args...)
+}
+
+// HasStagedChanges returns true if the working copy has modifications.
+// jj auto-tracks everything, so check if the working copy change is non-empty.
+func (j *JujutsuVCS) HasStagedChanges(ctx context.Context) (bool, error) {
+	output, err := j.runJJ(ctx, "diff", "--stat")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(output) != "", nil
+}
+
+// StageAndCommit snapshots and describes the current change, then creates a new one.
+func (j *JujutsuVCS) StageAndCommit(ctx context.Context, paths []string, message string, opts *CommitOptions) error {
+	// jj auto-snapshots, so just describe and commit
+	_, err := j.runJJ(ctx, "commit", "-m", message)
+	return err
+}
+
+// PushWithUpstream pushes a bookmark with tracking setup.
+func (j *JujutsuVCS) PushWithUpstream(ctx context.Context, remote, branch string) error {
+	_, err := j.runJJ(ctx, "git", "push", "--remote", remote, "--bookmark", branch)
+	return err
+}
+
+// Rebase rebases the current change onto the given ref (interface method).
+func (j *JujutsuVCS) Rebase(ctx context.Context, onto string) error {
+	_, err := j.runJJ(ctx, "rebase", "-d", onto)
+	return err
+}
+
+// RebaseAbort is a no-op for jj (jj handles conflicts inline, no "rebase in progress" state).
+func (j *JujutsuVCS) RebaseAbort(ctx context.Context) error {
+	return nil // jj doesn't have an "in-progress rebase" state
+}
+
 // --- jj-specific helper methods not in VCS interface ---
 
 // Describe updates the description of the current change.
@@ -877,8 +953,8 @@ func (j *JujutsuVCS) Describe(ctx context.Context, message string) error {
 	return err
 }
 
-// Rebase rebases changes onto a new base.
-func (j *JujutsuVCS) Rebase(ctx context.Context, source, destination string) error {
+// RebaseRevision rebases a specific revision onto a new base (jj-specific).
+func (j *JujutsuVCS) RebaseRevision(ctx context.Context, source, destination string) error {
 	args := []string{"rebase"}
 	if source != "" {
 		args = append(args, "-r", source)

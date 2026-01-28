@@ -3,6 +3,7 @@ package vcs
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
@@ -831,6 +832,104 @@ func (g *GitVCS) UntrackFiles(ctx context.Context, paths ...string) error {
 	}
 	args := append([]string{"rm", "--cached"}, paths...)
 	_, err := g.runGit(ctx, args...)
+	return err
+}
+
+// --- Phase 2: Sync-branch worktree/workspace operations ---
+
+// LogBetween returns commits in 'to' that are not in 'from'.
+func (g *GitVCS) LogBetween(ctx context.Context, from, to string) ([]ChangeInfo, error) {
+	format := "%H%x00%h%x00%s%x00%an%x00%ai%x00"
+	output, err := g.runGit(ctx, "log", "--oneline", "--format="+format, from+".."+to)
+	if err != nil {
+		return nil, err
+	}
+
+	var changes []ChangeInfo
+	for _, record := range strings.Split(output, "\n") {
+		if record == "" {
+			continue
+		}
+		parts := strings.SplitN(record, "\x00", 6)
+		if len(parts) < 5 {
+			continue
+		}
+		changes = append(changes, ChangeInfo{
+			ID:          parts[0],
+			ShortID:     parts[1],
+			Description: parts[2],
+			Author:      parts[3],
+			Timestamp:   parts[4],
+		})
+	}
+	return changes, nil
+}
+
+// DiffPath returns the diff of a specific file between two refs.
+func (g *GitVCS) DiffPath(ctx context.Context, from, to, path string) (string, error) {
+	args := []string{"diff", from + "..." + to}
+	if path != "" {
+		args = append(args, "--", path)
+	}
+	return g.runGit(ctx, args...)
+}
+
+// HasStagedChanges returns true if there are staged changes ready to commit.
+func (g *GitVCS) HasStagedChanges(ctx context.Context) (bool, error) {
+	_, err := g.runGit(ctx, "diff", "--cached", "--quiet")
+	if err != nil {
+		if _, ok := err.(*CommandError); ok {
+			return true, nil // exit code 1 = there are differences
+		}
+		return false, err
+	}
+	return false, nil // exit code 0 = no differences
+}
+
+// StageAndCommit stages specific files and commits them atomically.
+func (g *GitVCS) StageAndCommit(ctx context.Context, paths []string, message string, opts *CommitOptions) error {
+	// Stage first
+	if len(paths) > 0 {
+		stageArgs := append([]string{"add", "--sparse"}, paths...)
+		if _, err := g.runGit(ctx, stageArgs...); err != nil {
+			return fmt.Errorf("staging: %w", err)
+		}
+	}
+
+	// Check if anything is staged
+	hasStagedChanges, err := g.HasStagedChanges(ctx)
+	if err != nil {
+		return fmt.Errorf("checking staged changes: %w", err)
+	}
+	if !hasStagedChanges {
+		return nil // Nothing to commit
+	}
+
+	// Build commit args
+	commitArgs := []string{"commit", "-m", message}
+	if opts != nil && opts.NoGPGSign {
+		commitArgs = append(commitArgs, "--no-gpg-sign")
+	}
+
+	_, err = g.runGit(ctx, commitArgs...)
+	return err
+}
+
+// PushWithUpstream pushes with --set-upstream.
+func (g *GitVCS) PushWithUpstream(ctx context.Context, remote, branch string) error {
+	_, err := g.runGit(ctx, "push", "--set-upstream", remote, branch)
+	return err
+}
+
+// Rebase rebases the current branch onto the given ref.
+func (g *GitVCS) Rebase(ctx context.Context, onto string) error {
+	_, err := g.runGit(ctx, "rebase", onto)
+	return err
+}
+
+// RebaseAbort aborts a rebase in progress.
+func (g *GitVCS) RebaseAbort(ctx context.Context) error {
+	_, err := g.runGit(ctx, "rebase", "--abort")
 	return err
 }
 

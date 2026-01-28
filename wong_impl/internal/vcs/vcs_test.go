@@ -1415,3 +1415,284 @@ func TestVCS_CommandTimeout(t *testing.T) {
 		t.Log("Command completed before timeout (expected for fast operations)")
 	}
 }
+
+// --- Phase 2: Sync-branch worktree/workspace operation tests ---
+
+func TestGitVCS_LogBetween(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("log-between")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS failed: %v", err)
+	}
+
+	// Create initial commit on default branch
+	h.WriteFile(repoPath, "base.txt", "base")
+	h.runCmd(repoPath, "git", "add", "base.txt")
+	h.runCmd(repoPath, "git", "commit", "--no-gpg-sign", "-m", "base commit")
+
+	defaultBranch, _ := gitVCS.CurrentBranch(ctx)
+
+	// Create feature branch with extra commits
+	h.runCmd(repoPath, "git", "checkout", "-b", "feature")
+	h.WriteFile(repoPath, "feature1.txt", "feat1")
+	h.runCmd(repoPath, "git", "add", "feature1.txt")
+	h.runCmd(repoPath, "git", "commit", "--no-gpg-sign", "-m", "feature commit 1")
+	h.WriteFile(repoPath, "feature2.txt", "feat2")
+	h.runCmd(repoPath, "git", "add", "feature2.txt")
+	h.runCmd(repoPath, "git", "commit", "--no-gpg-sign", "-m", "feature commit 2")
+
+	// LogBetween: commits in feature not in default
+	changes, err := gitVCS.LogBetween(ctx, defaultBranch, "feature")
+	if err != nil {
+		t.Fatalf("LogBetween failed: %v", err)
+	}
+	if len(changes) != 2 {
+		t.Errorf("expected 2 commits, got %d", len(changes))
+	}
+
+	// LogBetween: commits in default not in feature (should be 0)
+	changes, err = gitVCS.LogBetween(ctx, "feature", defaultBranch)
+	if err != nil {
+		t.Fatalf("LogBetween reverse failed: %v", err)
+	}
+	if len(changes) != 0 {
+		t.Errorf("expected 0 commits, got %d", len(changes))
+	}
+}
+
+func TestGitVCS_DiffPath(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("diff-path")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS failed: %v", err)
+	}
+
+	// Create initial commit
+	h.WriteFile(repoPath, "file.txt", "original")
+	h.runCmd(repoPath, "git", "add", "file.txt")
+	h.runCmd(repoPath, "git", "commit", "--no-gpg-sign", "-m", "initial")
+
+	defaultBranch, _ := gitVCS.CurrentBranch(ctx)
+
+	// Create feature branch with changes
+	h.runCmd(repoPath, "git", "checkout", "-b", "feature")
+	h.WriteFile(repoPath, "file.txt", "modified")
+	h.runCmd(repoPath, "git", "add", "file.txt")
+	h.runCmd(repoPath, "git", "commit", "--no-gpg-sign", "-m", "modify file")
+
+	// DiffPath should show the change
+	diff, err := gitVCS.DiffPath(ctx, defaultBranch, "feature", "file.txt")
+	if err != nil {
+		t.Fatalf("DiffPath failed: %v", err)
+	}
+	if diff == "" {
+		t.Error("expected non-empty diff")
+	}
+	if !strings.Contains(diff, "original") || !strings.Contains(diff, "modified") {
+		t.Errorf("diff doesn't contain expected content: %s", diff)
+	}
+}
+
+func TestGitVCS_HasStagedChanges(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("staged-changes")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS failed: %v", err)
+	}
+
+	// Initial commit so we have a HEAD
+	h.WriteFile(repoPath, "init.txt", "init")
+	h.runCmd(repoPath, "git", "add", "init.txt")
+	h.runCmd(repoPath, "git", "commit", "--no-gpg-sign", "-m", "initial")
+
+	// No staged changes
+	has, err := gitVCS.HasStagedChanges(ctx)
+	if err != nil {
+		t.Fatalf("HasStagedChanges failed: %v", err)
+	}
+	if has {
+		t.Error("expected no staged changes")
+	}
+
+	// Stage a change
+	h.WriteFile(repoPath, "new.txt", "content")
+	h.runCmd(repoPath, "git", "add", "new.txt")
+
+	has, err = gitVCS.HasStagedChanges(ctx)
+	if err != nil {
+		t.Fatalf("HasStagedChanges after add failed: %v", err)
+	}
+	if !has {
+		t.Error("expected staged changes")
+	}
+}
+
+func TestGitVCS_StageAndCommit(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("stage-commit")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS failed: %v", err)
+	}
+
+	// Initial commit
+	h.WriteFile(repoPath, "init.txt", "init")
+	h.runCmd(repoPath, "git", "add", "init.txt")
+	h.runCmd(repoPath, "git", "commit", "--no-gpg-sign", "-m", "initial")
+
+	// Write a file, stage and commit it
+	h.WriteFile(repoPath, "beads.txt", "beads data")
+
+	opts := &CommitOptions{NoGPGSign: true}
+	err = gitVCS.StageAndCommit(ctx, []string{"beads.txt"}, "add beads data", opts)
+	if err != nil {
+		t.Fatalf("StageAndCommit failed: %v", err)
+	}
+
+	// Verify commit was made
+	changes, err := gitVCS.Log(ctx, 1)
+	if err != nil {
+		t.Fatalf("Log failed: %v", err)
+	}
+	if len(changes) == 0 {
+		t.Fatal("expected at least one commit")
+	}
+	if changes[0].Description != "add beads data" {
+		t.Errorf("expected commit message 'add beads data', got %q", changes[0].Description)
+	}
+}
+
+func TestGitVCS_RebaseAndAbort(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("rebase-test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS failed: %v", err)
+	}
+
+	// Create initial commit
+	h.WriteFile(repoPath, "file.txt", "base")
+	h.runCmd(repoPath, "git", "add", "file.txt")
+	h.runCmd(repoPath, "git", "commit", "--no-gpg-sign", "-m", "base")
+
+	defaultBranch, _ := gitVCS.CurrentBranch(ctx)
+
+	// Create diverging branches
+	h.runCmd(repoPath, "git", "checkout", "-b", "feature")
+	h.WriteFile(repoPath, "feature.txt", "feature")
+	h.runCmd(repoPath, "git", "add", "feature.txt")
+	h.runCmd(repoPath, "git", "commit", "--no-gpg-sign", "-m", "feature")
+
+	h.runCmd(repoPath, "git", "checkout", defaultBranch)
+	h.WriteFile(repoPath, "main-change.txt", "main")
+	h.runCmd(repoPath, "git", "add", "main-change.txt")
+	h.runCmd(repoPath, "git", "commit", "--no-gpg-sign", "-m", "main change")
+
+	// Rebase feature onto default (non-conflicting)
+	h.runCmd(repoPath, "git", "checkout", "feature")
+	err = gitVCS.Rebase(ctx, defaultBranch)
+	if err != nil {
+		t.Fatalf("Rebase failed: %v", err)
+	}
+
+	// RebaseAbort when no rebase in progress should still work (error is ok)
+	_ = gitVCS.RebaseAbort(ctx)
+}
+
+func TestJujutsuVCS_LogBetween(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-log-between")
+	ctx := context.Background()
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS failed: %v", err)
+	}
+
+	// Create a commit (this creates a change)
+	h.WriteFile(repoPath, "base.txt", "base")
+	jjVCS.Commit(ctx, "base commit", nil)
+
+	// Get the base change ID
+	baseID, err := jjVCS.ResolveRef(ctx, "@-")
+	if err != nil {
+		t.Fatalf("ResolveRef @- failed: %v", err)
+	}
+
+	// Create more commits
+	h.WriteFile(repoPath, "feat1.txt", "feat1")
+	jjVCS.Commit(ctx, "feature 1", nil)
+
+	// Current @ should be new empty working copy
+	currentID, err := jjVCS.ResolveRef(ctx, "@")
+	if err != nil {
+		t.Fatalf("ResolveRef @ failed: %v", err)
+	}
+
+	// LogBetween: changes after base (should include feature 1 + current)
+	changes, err := jjVCS.LogBetween(ctx, baseID, currentID)
+	if err != nil {
+		t.Fatalf("LogBetween failed: %v", err)
+	}
+	// Should have at least 1 change (feature 1)
+	if len(changes) < 1 {
+		t.Errorf("expected at least 1 change, got %d", len(changes))
+	}
+}
+
+func TestJujutsuVCS_StageAndCommit(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-stage-commit")
+	ctx := context.Background()
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS failed: %v", err)
+	}
+
+	// Write a file
+	h.WriteFile(repoPath, "data.txt", "some data")
+
+	// StageAndCommit
+	err = jjVCS.StageAndCommit(ctx, []string{"data.txt"}, "add data file", nil)
+	if err != nil {
+		t.Fatalf("StageAndCommit failed: %v", err)
+	}
+
+	// Verify the commit exists
+	changes, err := jjVCS.Log(ctx, 3)
+	if err != nil {
+		t.Fatalf("Log failed: %v", err)
+	}
+	found := false
+	for _, c := range changes {
+		if strings.Contains(c.Description, "add data file") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected to find 'add data file' commit in log")
+	}
+}
