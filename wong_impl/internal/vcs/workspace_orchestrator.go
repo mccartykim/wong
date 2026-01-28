@@ -36,11 +36,87 @@ package vcs
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
+
+// GenerateTaskID generates a unique task ID with a hash suffix.
+// Format: prefix-xxxx where xxxx is a random hex string.
+// This matches beads' ID format (e.g., wong-abc123).
+func GenerateTaskID(prefix string) string {
+	bytes := make([]byte, 3) // 6 hex chars
+	rand.Read(bytes)
+	hash := hex.EncodeToString(bytes)
+	if prefix == "" {
+		prefix = "task"
+	}
+	return fmt.Sprintf("%s-%s", prefix, hash)
+}
+
+// GenerateTaskIDFromChangeID creates a task ID using a jj change ID.
+// This creates a direct link between the task and the jj change it branched from.
+// Format: prefix-<short-change-id> (e.g., wong-kpqvuntm)
+func GenerateTaskIDFromChangeID(prefix, changeID string) string {
+	if prefix == "" {
+		prefix = "task"
+	}
+	// Use first 8 chars of change ID (jj short format)
+	shortID := changeID
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+	// Lowercase to match jj convention
+	shortID = strings.ToLower(shortID)
+	return fmt.Sprintf("%s-%s", prefix, shortID)
+}
+
+// GenerateSubtaskID generates a unique subtask ID.
+// If parentTaskID is provided, creates a hierarchical ID.
+// Example: wong-abc123 -> wong-abc123-def456
+func GenerateSubtaskID(parentTaskID string) string {
+	bytes := make([]byte, 3)
+	rand.Read(bytes)
+	hash := hex.EncodeToString(bytes)
+
+	if parentTaskID != "" {
+		return fmt.Sprintf("%s-%s", parentTaskID, hash)
+	}
+	return fmt.Sprintf("subtask-%s", hash)
+}
+
+// GenerateSubtaskIDFromChangeID creates a hierarchical subtask ID using a jj change ID.
+// Example: wong-kpqvuntm -> wong-kpqvuntm-xyzwmnop (where xyzwmnop is the subtask's change ID)
+func GenerateSubtaskIDFromChangeID(parentTaskID, changeID string) string {
+	shortID := changeID
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+	shortID = strings.ToLower(shortID)
+
+	if parentTaskID != "" {
+		return fmt.Sprintf("%s-%s", parentTaskID, shortID)
+	}
+	return fmt.Sprintf("subtask-%s", shortID)
+}
+
+// ParseTaskID extracts components from a task ID.
+// Returns (prefix, hash, isSubtask).
+func ParseTaskID(id string) (prefix string, hash string, isSubtask bool) {
+	parts := strings.Split(id, "-")
+	if len(parts) < 2 {
+		return id, "", false
+	}
+	if len(parts) == 2 {
+		return parts[0], parts[1], false
+	}
+	// Hierarchical ID: prefix-hash-subhash
+	return strings.Join(parts[:len(parts)-1], "-"), parts[len(parts)-1], true
+}
 
 // SubtaskState represents the state of a subtask workspace.
 type SubtaskState string
@@ -110,6 +186,67 @@ func NewWorkspaceOrchestrator(vcs *JujutsuVCS, basePath string) *WorkspaceOrches
 	}
 }
 
+// CreateSubtaskAuto creates a new subtask with an auto-generated ID.
+// The ID format matches beads: prefix-hash (e.g., wong-abc123).
+func (wo *WorkspaceOrchestrator) CreateSubtaskAuto(ctx context.Context, prefix, description string) (*Subtask, error) {
+	id := GenerateTaskID(prefix)
+	return wo.CreateSubtask(ctx, id, description)
+}
+
+// CreateSubtaskFromChange creates a subtask with an ID derived from the jj change ID.
+// This links the task directly to the jj change it branches from.
+// Example: If orchestrator is at change kpqvuntm, creates wong-kpqvuntm
+func (wo *WorkspaceOrchestrator) CreateSubtaskFromChange(ctx context.Context, prefix, description string) (*Subtask, error) {
+	// Get current change ID from main workspace
+	currentChange, err := wo.vcs.CurrentChange(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current change: %w", err)
+	}
+
+	id := GenerateTaskIDFromChangeID(prefix, currentChange.ShortID)
+	return wo.CreateSubtask(ctx, id, description)
+}
+
+// CreateSubtaskFromParent creates a subtask with a hierarchical ID.
+// Example: parent wong-abc123 -> subtask wong-abc123-def456
+func (wo *WorkspaceOrchestrator) CreateSubtaskFromParent(ctx context.Context, parentID, description string) (*Subtask, error) {
+	id := GenerateSubtaskID(parentID)
+	return wo.CreateSubtask(ctx, id, description)
+}
+
+// CreateSubtaskFromParentChange creates a hierarchical subtask using jj change IDs.
+// The subtask ID includes both the parent's change ID and its own new change ID.
+func (wo *WorkspaceOrchestrator) CreateSubtaskFromParentChange(ctx context.Context, parentID, description string) (*Subtask, error) {
+	// Create the subtask first to get its change ID
+	subtask, err := wo.CreateSubtask(ctx, "temp", description)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get the new workspace's change ID
+	subtaskVCS, err := wo.GetSubtaskVCS(subtask.ID)
+	if err != nil {
+		wo.cleanupSubtask(ctx, subtask)
+		return nil, err
+	}
+
+	newChange, err := subtaskVCS.CurrentChange(ctx)
+	if err != nil {
+		wo.cleanupSubtask(ctx, subtask)
+		return nil, err
+	}
+
+	// Generate hierarchical ID using change IDs
+	newID := GenerateSubtaskIDFromChangeID(parentID, newChange.ShortID)
+
+	// Update subtask with new ID (rename workspace would be complex, so we track by new ID)
+	delete(wo.subtasks, subtask.ID)
+	subtask.ID = newID
+	wo.subtasks[newID] = subtask
+
+	return subtask, nil
+}
+
 // CreateSubtask creates a new isolated workspace for a subtask.
 //
 // The workflow:
@@ -117,6 +254,9 @@ func NewWorkspaceOrchestrator(vcs *JujutsuVCS, basePath string) *WorkspaceOrches
 //  2. Create workspace directory in basePath
 //  3. Create jj workspace pointing to that directory
 //  4. The new workspace starts at the same change as main
+//
+// The ID should be unique and collision-resistant. Use CreateSubtaskAuto
+// or CreateSubtaskFromParent for auto-generated IDs.
 //
 // Returns the Subtask with all metadata populated.
 func (wo *WorkspaceOrchestrator) CreateSubtask(ctx context.Context, id, description string) (*Subtask, error) {

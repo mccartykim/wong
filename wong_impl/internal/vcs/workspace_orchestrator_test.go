@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -221,6 +222,211 @@ func TestWorkspaceOrchestrator_ListSubtasks(t *testing.T) {
 		if !ids[expected] {
 			t.Errorf("missing subtask %s", expected)
 		}
+	}
+}
+
+func TestGenerateTaskID(t *testing.T) {
+	// Test basic generation
+	id1 := GenerateTaskID("wong")
+	if !strings.HasPrefix(id1, "wong-") {
+		t.Errorf("expected prefix wong-, got %s", id1)
+	}
+	if len(id1) != 11 { // "wong-" (5) + 6 hex chars
+		t.Errorf("expected length 11, got %d for %s", len(id1), id1)
+	}
+
+	// Test uniqueness
+	id2 := GenerateTaskID("wong")
+	if id1 == id2 {
+		t.Error("expected unique IDs")
+	}
+
+	// Test default prefix
+	id3 := GenerateTaskID("")
+	if !strings.HasPrefix(id3, "task-") {
+		t.Errorf("expected default prefix task-, got %s", id3)
+	}
+}
+
+func TestGenerateSubtaskID(t *testing.T) {
+	// Test with parent
+	parentID := "wong-abc123"
+	subtaskID := GenerateSubtaskID(parentID)
+	if !strings.HasPrefix(subtaskID, "wong-abc123-") {
+		t.Errorf("expected prefix wong-abc123-, got %s", subtaskID)
+	}
+
+	// Test without parent
+	standaloneID := GenerateSubtaskID("")
+	if !strings.HasPrefix(standaloneID, "subtask-") {
+		t.Errorf("expected prefix subtask-, got %s", standaloneID)
+	}
+}
+
+func TestParseTaskID(t *testing.T) {
+	tests := []struct {
+		id        string
+		prefix    string
+		hash      string
+		isSubtask bool
+	}{
+		{"wong-abc123", "wong", "abc123", false},
+		{"task-def456", "task", "def456", false},
+		{"wong-abc123-def456", "wong-abc123", "def456", true},
+		{"a-b-c-d", "a-b-c", "d", true},
+		{"nohash", "nohash", "", false},
+	}
+
+	for _, tc := range tests {
+		prefix, hash, isSubtask := ParseTaskID(tc.id)
+		if prefix != tc.prefix {
+			t.Errorf("ParseTaskID(%s): expected prefix %s, got %s", tc.id, tc.prefix, prefix)
+		}
+		if hash != tc.hash {
+			t.Errorf("ParseTaskID(%s): expected hash %s, got %s", tc.id, tc.hash, hash)
+		}
+		if isSubtask != tc.isSubtask {
+			t.Errorf("ParseTaskID(%s): expected isSubtask %v, got %v", tc.id, tc.isSubtask, isSubtask)
+		}
+	}
+}
+
+func TestWorkspaceOrchestrator_CreateSubtaskAuto(t *testing.T) {
+	if _, err := os.Stat("/root/.cargo/bin/jj"); err != nil {
+		t.Skip("jj not installed")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("auto-id-test")
+
+	h.WriteFile(repoPath, "main.txt", "main content")
+	h.runCmd(repoPath, "jj", "commit", "-m", "Initial commit")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS failed: %v", err)
+	}
+
+	orchestrator := NewWorkspaceOrchestrator(jjVCS, h.tempDir)
+	ctx := context.Background()
+
+	// Create subtask with auto ID
+	subtask, err := orchestrator.CreateSubtaskAuto(ctx, "wong", "Auto-generated subtask")
+	if err != nil {
+		t.Fatalf("CreateSubtaskAuto failed: %v", err)
+	}
+
+	// Verify ID format
+	if !strings.HasPrefix(subtask.ID, "wong-") {
+		t.Errorf("expected ID to start with wong-, got %s", subtask.ID)
+	}
+
+	// Verify workspace name matches ID
+	expectedName := "subtask-" + subtask.ID
+	if subtask.WorkspaceName != expectedName {
+		t.Errorf("expected workspace name %s, got %s", expectedName, subtask.WorkspaceName)
+	}
+}
+
+func TestGenerateTaskIDFromChangeID(t *testing.T) {
+	// Test with full change ID
+	id1 := GenerateTaskIDFromChangeID("wong", "kpqvuntmwxyz1234")
+	if id1 != "wong-kpqvuntm" {
+		t.Errorf("expected wong-kpqvuntm, got %s", id1)
+	}
+
+	// Test with short change ID
+	id2 := GenerateTaskIDFromChangeID("wong", "abc")
+	if id2 != "wong-abc" {
+		t.Errorf("expected wong-abc, got %s", id2)
+	}
+
+	// Test uppercase conversion
+	id3 := GenerateTaskIDFromChangeID("wong", "ABCDEFGH")
+	if id3 != "wong-abcdefgh" {
+		t.Errorf("expected wong-abcdefgh, got %s", id3)
+	}
+}
+
+func TestWorkspaceOrchestrator_CreateSubtaskFromChange(t *testing.T) {
+	if _, err := os.Stat("/root/.cargo/bin/jj"); err != nil {
+		t.Skip("jj not installed")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("change-id-test")
+
+	h.WriteFile(repoPath, "main.txt", "main content")
+	h.runCmd(repoPath, "jj", "commit", "-m", "Initial commit")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS failed: %v", err)
+	}
+
+	// Get current change ID for verification
+	ctx := context.Background()
+	currentChange, err := jjVCS.CurrentChange(ctx)
+	if err != nil {
+		t.Fatalf("CurrentChange failed: %v", err)
+	}
+
+	orchestrator := NewWorkspaceOrchestrator(jjVCS, h.tempDir)
+
+	// Create subtask from current change
+	subtask, err := orchestrator.CreateSubtaskFromChange(ctx, "wong", "Change-based subtask")
+	if err != nil {
+		t.Fatalf("CreateSubtaskFromChange failed: %v", err)
+	}
+
+	// Verify ID contains the change ID
+	expectedPrefix := "wong-" + strings.ToLower(currentChange.ShortID[:8])
+	if subtask.ID != expectedPrefix {
+		t.Logf("Current change short ID: %s", currentChange.ShortID)
+		t.Errorf("expected ID %s, got %s", expectedPrefix, subtask.ID)
+	}
+}
+
+func TestWorkspaceOrchestrator_CreateSubtaskFromParent(t *testing.T) {
+	if _, err := os.Stat("/root/.cargo/bin/jj"); err != nil {
+		t.Skip("jj not installed")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("parent-id-test")
+
+	h.WriteFile(repoPath, "main.txt", "main content")
+	h.runCmd(repoPath, "jj", "commit", "-m", "Initial commit")
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS failed: %v", err)
+	}
+
+	orchestrator := NewWorkspaceOrchestrator(jjVCS, h.tempDir)
+	ctx := context.Background()
+
+	// Create parent task first
+	parentTask, err := orchestrator.CreateSubtaskAuto(ctx, "wong", "Parent task")
+	if err != nil {
+		t.Fatalf("CreateSubtaskAuto failed: %v", err)
+	}
+
+	// Create child subtask from parent
+	childTask, err := orchestrator.CreateSubtaskFromParent(ctx, parentTask.ID, "Child subtask")
+	if err != nil {
+		t.Fatalf("CreateSubtaskFromParent failed: %v", err)
+	}
+
+	// Verify hierarchical ID
+	if !strings.HasPrefix(childTask.ID, parentTask.ID+"-") {
+		t.Errorf("expected child ID to start with %s-, got %s", parentTask.ID, childTask.ID)
+	}
+
+	// Verify it's recognized as a subtask
+	_, _, isSubtask := ParseTaskID(childTask.ID)
+	if !isSubtask {
+		t.Error("expected child to be recognized as subtask")
 	}
 }
 
