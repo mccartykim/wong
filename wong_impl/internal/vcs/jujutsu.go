@@ -945,6 +945,38 @@ func (j *JujutsuVCS) RebaseAbort(ctx context.Context) error {
 	return nil // jj doesn't have an "in-progress rebase" state
 }
 
+// --- Phase 3: Hook integration operations ---
+
+// IsFileTracked returns true if the file is tracked by jj.
+func (j *JujutsuVCS) IsFileTracked(ctx context.Context, path string) (bool, error) {
+	output, err := j.runJJ(ctx, "file", "list", path)
+	if err != nil {
+		return false, nil // Error means not tracked or jj issue
+	}
+	return strings.TrimSpace(output) != "", nil
+}
+
+// ConfigureHooksPath sets the hooks directory for jj.
+// jj doesn't have a native hooks path config - uses .beads/jj-hooks.toml instead.
+func (j *JujutsuVCS) ConfigureHooksPath(ctx context.Context, path string) error {
+	// jj hooks are managed by .beads/jj-hooks.toml and wrapper scripts
+	// No native jj config equivalent - this is a no-op.
+	// The hooks_jj.go file handles jj hook installation separately.
+	return nil
+}
+
+// GetHooksPath returns the hooks path for jj.
+// jj doesn't use core.hooksPath - returns empty.
+func (j *JujutsuVCS) GetHooksPath(ctx context.Context) (string, error) {
+	return "", nil // jj manages hooks differently
+}
+
+// ConfigureMergeDriver configures a merge driver for jj.
+// jj handles conflicts inline (not via merge drivers), so this is a no-op.
+func (j *JujutsuVCS) ConfigureMergeDriver(ctx context.Context, driverCmd, driverName string) error {
+	return nil // jj handles conflicts differently
+}
+
 // --- jj-specific helper methods not in VCS interface ---
 
 // Describe updates the description of the current change.

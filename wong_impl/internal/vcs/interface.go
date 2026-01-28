@@ -272,6 +272,24 @@ type VCS interface {
 	// For jj: no-op (jj handles conflicts inline). For git: git rebase --abort.
 	RebaseAbort(ctx context.Context) error
 
+	// --- Phase 3: Hook integration operations ---
+
+	// IsFileTracked returns true if the file is tracked by the VCS.
+	// For git: git ls-files --error-unmatch. For jj: jj file list.
+	IsFileTracked(ctx context.Context, path string) (bool, error)
+
+	// ConfigureHooksPath sets the hooks directory path.
+	// For git: git config core.hooksPath. For jj: configure in jj config.
+	ConfigureHooksPath(ctx context.Context, path string) error
+
+	// GetHooksPath returns the configured hooks path, or empty if default.
+	GetHooksPath(ctx context.Context) (string, error)
+
+	// ConfigureMergeDriver sets up a custom merge driver for JSONL files.
+	// For git: configures merge.beads.driver and merge.beads.name.
+	// For jj: no-op (jj handles conflicts differently).
+	ConfigureMergeDriver(ctx context.Context, driverCmd, driverName string) error
+
 	// --- Stack Navigation ---
 
 	// Next moves to the next (child) change in the stack.

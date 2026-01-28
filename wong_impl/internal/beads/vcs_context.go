@@ -344,6 +344,28 @@ func (vc *VCSContext) VcsRebaseAbort(ctx context.Context) error {
 	return vc.VCS.RebaseAbort(ctx)
 }
 
+// --- Phase 3: Hook integration wrappers ---
+
+// VcsIsFileTracked returns true if the file is tracked.
+func (vc *VCSContext) VcsIsFileTracked(ctx context.Context, path string) (bool, error) {
+	return vc.VCS.IsFileTracked(ctx, path)
+}
+
+// VcsConfigureHooksPath sets the hooks directory.
+func (vc *VCSContext) VcsConfigureHooksPath(ctx context.Context, path string) error {
+	return vc.VCS.ConfigureHooksPath(ctx, path)
+}
+
+// VcsGetHooksPath returns the configured hooks path.
+func (vc *VCSContext) VcsGetHooksPath(ctx context.Context) (string, error) {
+	return vc.VCS.GetHooksPath(ctx)
+}
+
+// VcsConfigureMergeDriver sets up the custom merge driver.
+func (vc *VCSContext) VcsConfigureMergeDriver(ctx context.Context, driverCmd, driverName string) error {
+	return vc.VCS.ConfigureMergeDriver(ctx, driverCmd, driverName)
+}
+
 // mapGitToJJ translates common git commands to jj equivalents.
 func (vc *VCSContext) mapGitToJJ(ctx context.Context, args ...string) *exec.Cmd {
 	if len(args) == 0 {

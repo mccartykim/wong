@@ -933,5 +933,49 @@ func (g *GitVCS) RebaseAbort(ctx context.Context) error {
 	return err
 }
 
+// --- Phase 3: Hook integration operations ---
+
+// IsFileTracked returns true if the file is tracked by git.
+func (g *GitVCS) IsFileTracked(ctx context.Context, path string) (bool, error) {
+	_, err := g.runGit(ctx, "ls-files", "--error-unmatch", path)
+	if err != nil {
+		if _, ok := err.(*CommandError); ok {
+			return false, nil // exit code 1 = not tracked
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// ConfigureHooksPath sets the git hooks directory.
+func (g *GitVCS) ConfigureHooksPath(ctx context.Context, path string) error {
+	_, err := g.runGit(ctx, "config", "core.hooksPath", path)
+	return err
+}
+
+// GetHooksPath returns the configured hooks path.
+func (g *GitVCS) GetHooksPath(ctx context.Context) (string, error) {
+	output, err := g.runGit(ctx, "config", "--get", "core.hooksPath")
+	if err != nil {
+		// git config --get exits 1 when key not found - return empty (not an error)
+		if _, ok := err.(*CommandError); ok {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(output), nil
+}
+
+// ConfigureMergeDriver configures a custom merge driver.
+func (g *GitVCS) ConfigureMergeDriver(ctx context.Context, driverCmd, driverName string) error {
+	if _, err := g.runGit(ctx, "config", "merge.beads.driver", driverCmd); err != nil {
+		return fmt.Errorf("setting merge driver command: %w", err)
+	}
+	if _, err := g.runGit(ctx, "config", "merge.beads.name", driverName); err != nil {
+		return fmt.Errorf("setting merge driver name: %w", err)
+	}
+	return nil
+}
+
 // Ensure GitVCS implements VCS.
 var _ VCS = (*GitVCS)(nil)

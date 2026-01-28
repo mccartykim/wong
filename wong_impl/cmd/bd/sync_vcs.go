@@ -723,3 +723,69 @@ func vcsGetRepoRoot(path string) (string, error) {
 	}
 	return vc.VCS.RepoRoot(), nil
 }
+
+// --- Phase 3: Hook integration bridge functions ---
+// These functions abstract git hook operations (core.hooksPath, merge.beads.driver,
+// ls-files --error-unmatch) for VCS-agnostic use.
+
+// vcsIsFileTracked returns true if the file is tracked by VCS.
+// Replacement for: exec.Command("git", "ls-files", "--error-unmatch", path)
+func vcsIsFileTracked(ctx context.Context, path string) (bool, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return false, fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsIsFileTracked(ctx, path)
+}
+
+// vcsConfigureHooksPath sets the hooks directory path.
+// Replacement for: exec.Command("git", "config", "core.hooksPath", path)
+func vcsConfigureHooksPath(ctx context.Context, path string) error {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsConfigureHooksPath(ctx, path)
+}
+
+// vcsGetHooksPath returns the configured hooks path, or empty if default.
+// Replacement for: exec.Command("git", "config", "--get", "core.hooksPath")
+func vcsGetHooksPath(ctx context.Context) (string, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return "", fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsGetHooksPath(ctx)
+}
+
+// vcsConfigureMergeDriver sets up the custom merge driver for JSONL files.
+// Replacement for: exec.Command("git", "config", "merge.beads.driver", cmd) +
+//
+//	exec.Command("git", "config", "merge.beads.name", name)
+func vcsConfigureMergeDriver(ctx context.Context, driverCmd, driverName string) error {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsConfigureMergeDriver(ctx, driverCmd, driverName)
+}
+
+// vcsStageFiles stages specific files for the next commit.
+// Replacement for: rc.GitCmdCWD(ctx, "add", files...) in hook callbacks.
+// For jj, this is a no-op (auto-snapshots).
+func vcsStageFiles(ctx context.Context, paths ...string) error {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsStage(ctx, paths...)
+}
+
+// vcsStatusPorcelain returns the VCS status entries (replaces git status --porcelain).
+func vcsStatusPorcelain(ctx context.Context) ([]vcs.StatusEntry, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return nil, fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsStatus(ctx)
+}

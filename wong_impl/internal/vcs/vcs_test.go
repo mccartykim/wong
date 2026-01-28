@@ -1696,3 +1696,172 @@ func TestJujutsuVCS_StageAndCommit(t *testing.T) {
 		t.Error("expected to find 'add data file' commit in log")
 	}
 }
+
+// --- Phase 3: Hook integration tests ---
+
+func TestGitVCS_IsFileTracked(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("track-test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Create and commit a file
+	h.WriteFile(repoPath, "tracked.txt", "hello")
+	h.runCmd(repoPath, "git", "add", "tracked.txt")
+	h.runCmd(repoPath, "git", "commit", "-m", "add tracked file")
+
+	// tracked.txt should be tracked
+	tracked, err := gitVCS.IsFileTracked(ctx, "tracked.txt")
+	if err != nil {
+		t.Fatalf("IsFileTracked(tracked.txt): %v", err)
+	}
+	if !tracked {
+		t.Error("expected tracked.txt to be tracked")
+	}
+
+	// untracked.txt should not be tracked
+	h.WriteFile(repoPath, "untracked.txt", "world")
+	tracked, err = gitVCS.IsFileTracked(ctx, "untracked.txt")
+	if err != nil {
+		t.Fatalf("IsFileTracked(untracked.txt): %v", err)
+	}
+	if tracked {
+		t.Error("expected untracked.txt to NOT be tracked")
+	}
+}
+
+func TestGitVCS_ConfigureHooksPath(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("hooks-path-test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Initially no custom hooks path
+	hooksPath, err := gitVCS.GetHooksPath(ctx)
+	if err != nil {
+		t.Fatalf("GetHooksPath: %v", err)
+	}
+	if hooksPath != "" {
+		t.Errorf("expected empty hooks path, got %q", hooksPath)
+	}
+
+	// Configure custom hooks path
+	if err := gitVCS.ConfigureHooksPath(ctx, ".beads/hooks"); err != nil {
+		t.Fatalf("ConfigureHooksPath: %v", err)
+	}
+
+	// Verify hooks path is set
+	hooksPath, err = gitVCS.GetHooksPath(ctx)
+	if err != nil {
+		t.Fatalf("GetHooksPath after set: %v", err)
+	}
+	if hooksPath != ".beads/hooks" {
+		t.Errorf("expected hooks path '.beads/hooks', got %q", hooksPath)
+	}
+}
+
+func TestGitVCS_ConfigureMergeDriver(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("merge-driver-test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Configure merge driver
+	driverCmd := "bd merge %A %O %A %B"
+	driverName := "bd JSONL merge driver"
+	if err := gitVCS.ConfigureMergeDriver(ctx, driverCmd, driverName); err != nil {
+		t.Fatalf("ConfigureMergeDriver: %v", err)
+	}
+
+	// Verify driver command
+	val, err := gitVCS.GetConfig(ctx, "merge.beads.driver")
+	if err != nil {
+		t.Fatalf("GetConfig(merge.beads.driver): %v", err)
+	}
+	if strings.TrimSpace(val) != driverCmd {
+		t.Errorf("expected driver %q, got %q", driverCmd, val)
+	}
+
+	// Verify driver name
+	val, err = gitVCS.GetConfig(ctx, "merge.beads.name")
+	if err != nil {
+		t.Fatalf("GetConfig(merge.beads.name): %v", err)
+	}
+	if strings.TrimSpace(val) != driverName {
+		t.Errorf("expected name %q, got %q", driverName, val)
+	}
+}
+
+func TestJujutsuVCS_IsFileTracked(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-track-test")
+	ctx := context.Background()
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	// Create a file (jj auto-tracks files in working copy)
+	h.WriteFile(repoPath, "tracked.txt", "hello")
+	// Commit so it's definitely tracked
+	h.runCmd(repoPath, "jj", "commit", "-m", "add tracked file")
+
+	tracked, err := jjVCS.IsFileTracked(ctx, "tracked.txt")
+	if err != nil {
+		t.Fatalf("IsFileTracked(tracked.txt): %v", err)
+	}
+	if !tracked {
+		t.Error("expected tracked.txt to be tracked in jj")
+	}
+}
+
+func TestJujutsuVCS_HookMethodsAreNoOps(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-hooks-noop")
+	ctx := context.Background()
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS: %v", err)
+	}
+
+	// ConfigureHooksPath should be no-op (no error)
+	if err := jjVCS.ConfigureHooksPath(ctx, ".beads/hooks"); err != nil {
+		t.Errorf("ConfigureHooksPath should be no-op, got: %v", err)
+	}
+
+	// GetHooksPath should return empty (jj manages hooks differently)
+	path, err := jjVCS.GetHooksPath(ctx)
+	if err != nil {
+		t.Errorf("GetHooksPath should not error, got: %v", err)
+	}
+	if path != "" {
+		t.Errorf("GetHooksPath should return empty for jj, got: %q", path)
+	}
+
+	// ConfigureMergeDriver should be no-op
+	if err := jjVCS.ConfigureMergeDriver(ctx, "cmd", "name"); err != nil {
+		t.Errorf("ConfigureMergeDriver should be no-op, got: %v", err)
+	}
+}
