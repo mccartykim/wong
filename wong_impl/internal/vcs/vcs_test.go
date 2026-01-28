@@ -2914,3 +2914,559 @@ func TestGitVCS_DiffHasChanges_Clean(t *testing.T) {
 		t.Error("expected changes after modification")
 	}
 }
+
+// --- wong-bpg.2: Workflow chain tests ---
+
+func TestGitVCS_StageCommitWorkflow(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Stage → Commit → verify via Log
+	h.WriteFile(repoPath, "file1.txt", "content1")
+	if err := gitVCS.Stage(ctx, "file1.txt"); err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	if err := gitVCS.Commit(ctx, "first commit", nil); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	// Verify via Log
+	logs, err := gitVCS.Log(ctx, 5)
+	if err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+	if len(logs) == 0 {
+		t.Fatal("expected at least 1 log entry")
+	}
+	if !strings.Contains(logs[0].Description, "first commit") {
+		t.Errorf("expected 'first commit' in log, got %q", logs[0].Description)
+	}
+
+	// Stage and commit a second file
+	h.WriteFile(repoPath, "file2.txt", "content2")
+	if err := gitVCS.Stage(ctx, "file2.txt"); err != nil {
+		t.Fatalf("Stage file2: %v", err)
+	}
+	if err := gitVCS.Commit(ctx, "second commit", nil); err != nil {
+		t.Fatalf("Commit 2: %v", err)
+	}
+
+	logs, err = gitVCS.Log(ctx, 5)
+	if err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+	if len(logs) < 2 {
+		t.Fatalf("expected at least 2 log entries, got %d", len(logs))
+	}
+}
+
+func TestGitVCS_BranchCreateSwitchWorkflow(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	// Initial commit on trunk
+	h.WriteFile(repoPath, "init.txt", "init")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "trunk")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Create feature branch
+	if err := gitVCS.CreateBranch(ctx, "feature-x"); err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+
+	// Verify it exists
+	exists, err := gitVCS.BranchExists(ctx, "feature-x")
+	if err != nil || !exists {
+		t.Fatalf("expected feature-x to exist")
+	}
+
+	// Switch to it
+	if err := gitVCS.SwitchBranch(ctx, "feature-x"); err != nil {
+		t.Fatalf("SwitchBranch: %v", err)
+	}
+
+	// Verify current branch
+	branch, err := gitVCS.CurrentBranch(ctx)
+	if err != nil {
+		t.Fatalf("CurrentBranch: %v", err)
+	}
+	if branch != "feature-x" {
+		t.Errorf("expected 'feature-x', got %q", branch)
+	}
+
+	// Add commit on feature branch
+	h.WriteFile(repoPath, "feature.txt", "feature content")
+	if err := gitVCS.Stage(ctx, "feature.txt"); err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	if err := gitVCS.Commit(ctx, "feature work", nil); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	// Switch back to trunk
+	if err := gitVCS.SwitchBranch(ctx, "trunk"); err != nil {
+		t.Fatalf("SwitchBranch back: %v", err)
+	}
+
+	// feature.txt should not exist on trunk
+	if _, err := os.Stat(filepath.Join(repoPath, "feature.txt")); !os.IsNotExist(err) {
+		t.Error("expected feature.txt to not exist on trunk")
+	}
+}
+
+func TestGitVCS_SquashAmendWorkflow(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	// Initial commit
+	h.WriteFile(repoPath, "base.txt", "base")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "trunk")
+	h.runCmd(repoPath, "git", "commit", "-m", "base commit")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Make a change and squash (amend)
+	h.WriteFile(repoPath, "base.txt", "base updated")
+	if err := gitVCS.Stage(ctx, "base.txt"); err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+
+	// Squash = commit --amend in git
+	if err := gitVCS.Squash(ctx, ""); err != nil {
+		t.Fatalf("Squash: %v", err)
+	}
+
+	// Should still be only 1 commit (the amended one)
+	logs, err := gitVCS.Log(ctx, 10)
+	if err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Errorf("expected 1 log entry after squash, got %d", len(logs))
+	}
+}
+
+func TestGitVCS_StageAndCommitWorkflow(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Use StageAndCommit for atomic operation
+	h.WriteFile(repoPath, "atomic1.txt", "content1")
+	h.WriteFile(repoPath, "atomic2.txt", "content2")
+
+	err = gitVCS.StageAndCommit(ctx, []string{"atomic1.txt", "atomic2.txt"}, "atomic commit", nil)
+	if err != nil {
+		t.Fatalf("StageAndCommit: %v", err)
+	}
+
+	// Verify both files are committed
+	logs, err := gitVCS.Log(ctx, 1)
+	if err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+	if len(logs) == 0 || !strings.Contains(logs[0].Description, "atomic commit") {
+		t.Error("expected 'atomic commit' in log")
+	}
+
+	// Working tree should be clean
+	entries, err := gitVCS.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected clean status after StageAndCommit, got %d entries", len(entries))
+	}
+}
+
+func TestGitVCS_CommitWithOptions(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Empty commit with AllowEmpty
+	err = gitVCS.Commit(ctx, "empty commit", &CommitOptions{AllowEmpty: true})
+	if err != nil {
+		t.Fatalf("Commit with AllowEmpty: %v", err)
+	}
+
+	// Commit with custom author
+	h.WriteFile(repoPath, "authored.txt", "content")
+	if err := gitVCS.Stage(ctx, "authored.txt"); err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	err = gitVCS.Commit(ctx, "authored commit", &CommitOptions{
+		Author:    "Other User <other@example.com>",
+		NoGPGSign: true,
+	})
+	if err != nil {
+		t.Fatalf("Commit with Author: %v", err)
+	}
+}
+
+func TestGitVCS_LogBetween_ThreeCommits(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	// Create base commit
+	h.WriteFile(repoPath, "base.txt", "base")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "trunk")
+	h.runCmd(repoPath, "git", "commit", "-m", "base")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Get base ref
+	baseRef, _ := gitVCS.ResolveRef(ctx, "HEAD")
+
+	// Add two more commits
+	h.WriteFile(repoPath, "file1.txt", "f1")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "commit 1")
+
+	h.WriteFile(repoPath, "file2.txt", "f2")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "commit 2")
+
+	headRef, _ := gitVCS.ResolveRef(ctx, "HEAD")
+
+	// LogBetween base..HEAD should give 2 commits
+	changes, err := gitVCS.LogBetween(ctx, baseRef, headRef)
+	if err != nil {
+		t.Fatalf("LogBetween: %v", err)
+	}
+	if len(changes) != 2 {
+		t.Errorf("expected 2 commits between base and HEAD, got %d", len(changes))
+	}
+}
+
+func TestGitVCS_Diff(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "diff.txt", "original content\n")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "trunk")
+	h.runCmd(repoPath, "git", "commit", "-m", "v1")
+
+	baseRef, _ := NewGitVCS(repoPath)
+	_ = baseRef
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	ref1, _ := gitVCS.ResolveRef(ctx, "HEAD")
+
+	h.WriteFile(repoPath, "diff.txt", "modified content\n")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "v2")
+
+	ref2, _ := gitVCS.ResolveRef(ctx, "HEAD")
+
+	diffOutput, err := gitVCS.Diff(ctx, ref1, ref2)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !strings.Contains(diffOutput, "original content") || !strings.Contains(diffOutput, "modified content") {
+		t.Errorf("diff should contain both old and new content, got: %s", diffOutput)
+	}
+}
+
+func TestGitVCS_Show(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "show.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "trunk")
+	h.runCmd(repoPath, "git", "commit", "-m", "show test commit")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	ref, _ := gitVCS.ResolveRef(ctx, "HEAD")
+	info, err := gitVCS.Show(ctx, ref)
+	if err != nil {
+		t.Fatalf("Show: %v", err)
+	}
+	if info == nil {
+		t.Fatal("expected non-nil ChangeInfo from Show")
+	}
+	if !strings.Contains(info.Description, "show test commit") {
+		t.Errorf("expected 'show test commit' in description, got %q", info.Description)
+	}
+	if info.Author == "" {
+		t.Error("expected non-empty author in Show output")
+	}
+}
+
+func TestGitVCS_DiffPath_SelectiveChanges(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "a.txt", "original a\n")
+	h.WriteFile(repoPath, "b.txt", "original b\n")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "trunk")
+	h.runCmd(repoPath, "git", "commit", "-m", "v1")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	ref1, _ := gitVCS.ResolveRef(ctx, "HEAD")
+
+	// Modify only a.txt
+	h.WriteFile(repoPath, "a.txt", "modified a\n")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "v2")
+
+	ref2, _ := gitVCS.ResolveRef(ctx, "HEAD")
+
+	// DiffPath for a.txt should show changes
+	diffA, err := gitVCS.DiffPath(ctx, ref1, ref2, "a.txt")
+	if err != nil {
+		t.Fatalf("DiffPath a.txt: %v", err)
+	}
+	if !strings.Contains(diffA, "modified a") {
+		t.Errorf("expected diff for a.txt, got: %s", diffA)
+	}
+
+	// DiffPath for b.txt should be empty (no changes)
+	diffB, err := gitVCS.DiffPath(ctx, ref1, ref2, "b.txt")
+	if err != nil {
+		t.Fatalf("DiffPath b.txt: %v", err)
+	}
+	if strings.TrimSpace(diffB) != "" {
+		t.Errorf("expected empty diff for b.txt, got: %s", diffB)
+	}
+}
+
+func TestGitVCS_IsAncestor_ParentChild(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "base.txt", "base")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "trunk")
+	h.runCmd(repoPath, "git", "commit", "-m", "base")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	baseRef, _ := gitVCS.ResolveRef(ctx, "HEAD")
+
+	h.WriteFile(repoPath, "child.txt", "child")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "child")
+
+	childRef, _ := gitVCS.ResolveRef(ctx, "HEAD")
+
+	// base is ancestor of child
+	isAnc, err := gitVCS.IsAncestor(ctx, baseRef, childRef)
+	if err != nil {
+		t.Fatalf("IsAncestor: %v", err)
+	}
+	if !isAnc {
+		t.Error("expected base to be ancestor of child")
+	}
+
+	// child is NOT ancestor of base
+	isAnc, err = gitVCS.IsAncestor(ctx, childRef, baseRef)
+	if err != nil {
+		t.Fatalf("IsAncestor reverse: %v", err)
+	}
+	if isAnc {
+		t.Error("expected child to NOT be ancestor of base")
+	}
+}
+
+func TestGitVCS_HasStagedChanges_Workflow(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "test.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// No staged changes
+	hasStaged, err := gitVCS.HasStagedChanges(ctx)
+	if err != nil {
+		t.Fatalf("HasStagedChanges: %v", err)
+	}
+	if hasStaged {
+		t.Error("expected no staged changes on clean repo")
+	}
+
+	// Modify and stage
+	h.WriteFile(repoPath, "test.txt", "modified")
+	if err := gitVCS.Stage(ctx, "test.txt"); err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+
+	hasStaged, err = gitVCS.HasStagedChanges(ctx)
+	if err != nil {
+		t.Fatalf("HasStagedChanges after stage: %v", err)
+	}
+	if !hasStaged {
+		t.Error("expected staged changes after staging")
+	}
+}
+
+func TestGitVCS_ResolveRef_HEAD(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "test.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "trunk")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	ref, err := gitVCS.ResolveRef(ctx, "HEAD")
+	if err != nil {
+		t.Fatalf("ResolveRef HEAD: %v", err)
+	}
+	if len(ref) < 7 {
+		t.Errorf("expected commit hash, got %q", ref)
+	}
+
+	// Also resolve by branch name
+	refByBranch, err := gitVCS.ResolveRef(ctx, "trunk")
+	if err != nil {
+		t.Fatalf("ResolveRef trunk: %v", err)
+	}
+	if ref != refByBranch {
+		t.Errorf("expected HEAD and trunk to resolve to same commit: %s vs %s", ref, refByBranch)
+	}
+}
+
+func TestGitVCS_ListBranches(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "test.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "main")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	h.runCmd(repoPath, "git", "branch", "feature-a")
+	h.runCmd(repoPath, "git", "branch", "feature-b")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	branches, err := gitVCS.ListBranches(ctx)
+	if err != nil {
+		t.Fatalf("ListBranches: %v", err)
+	}
+	if len(branches) < 3 {
+		t.Errorf("expected at least 3 branches, got %d", len(branches))
+	}
+
+	// Find current branch
+	hasCurrent := false
+	for _, b := range branches {
+		if b.IsCurrent && b.Name == "main" {
+			hasCurrent = true
+		}
+	}
+	if !hasCurrent {
+		t.Error("expected 'main' to be the current branch")
+	}
+}
+
+func TestGitVCS_RevListCount_WorkflowChain(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	// Create 3 commits on trunk
+	h.WriteFile(repoPath, "base.txt", "base")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "trunk")
+	h.runCmd(repoPath, "git", "commit", "-m", "c1")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	c1, _ := gitVCS.ResolveRef(ctx, "HEAD")
+
+	h.WriteFile(repoPath, "f1.txt", "f1")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "c2")
+
+	h.WriteFile(repoPath, "f2.txt", "f2")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "c3")
+
+	c3, _ := gitVCS.ResolveRef(ctx, "HEAD")
+
+	// RevListCount c1..c3 should be 2
+	count, err := gitVCS.RevListCount(ctx, c1, c3)
+	if err != nil {
+		t.Fatalf("RevListCount: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 commits between c1 and c3, got %d", count)
+	}
+}
