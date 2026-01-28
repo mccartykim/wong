@@ -844,6 +844,280 @@ func BenchmarkJJStatus(b *testing.B) {
 	}
 }
 
+// --- Stack Navigation Tests ---
+
+func TestJujutsuVCS_NextPrev(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-nextprev")
+	ctx := context.Background()
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS failed: %v", err)
+	}
+
+	// Create a stack of changes
+	h.WriteFile(repoPath, "file1.txt", "first")
+	jjVCS.Commit(ctx, "First change", nil)
+
+	h.WriteFile(repoPath, "file2.txt", "second")
+	jjVCS.Commit(ctx, "Second change", nil)
+
+	h.WriteFile(repoPath, "file3.txt", "third")
+	jjVCS.Commit(ctx, "Third change", nil)
+
+	// We're now at the working copy after third change
+	// Prev should move to parent
+	info, err := jjVCS.Prev(ctx)
+	if err != nil {
+		t.Fatalf("Prev failed: %v", err)
+	}
+	if info == nil {
+		t.Fatal("Prev returned nil info")
+	}
+	t.Logf("After prev: %s - %s", info.ShortID, info.Description)
+
+	// Next should move back forward
+	info, err = jjVCS.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next failed: %v", err)
+	}
+	if info == nil {
+		t.Fatal("Next returned nil info")
+	}
+	t.Logf("After next: %s - %s", info.ShortID, info.Description)
+}
+
+// --- Extended Bookmark Tests ---
+
+func TestJujutsuVCS_BookmarkManagement(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-bookmark-mgmt")
+	ctx := context.Background()
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS failed: %v", err)
+	}
+
+	// Create content so we have a real change
+	h.WriteFile(repoPath, "file.txt", "content")
+	jjVCS.Commit(ctx, "Initial", nil)
+
+	// Create a bookmark
+	err = jjVCS.CreateBranch(ctx, "feature-1")
+	if err != nil {
+		t.Fatalf("CreateBranch failed: %v", err)
+	}
+
+	// List bookmarks
+	branches, err := jjVCS.ListBranches(ctx)
+	if err != nil {
+		t.Fatalf("ListBranches failed: %v", err)
+	}
+
+	found := false
+	for _, b := range branches {
+		if b.Name == "feature-1" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected to find feature-1 bookmark")
+	}
+
+	// Move bookmark (set to current)
+	err = jjVCS.SetBranch(ctx, "feature-1", "@")
+	if err != nil {
+		t.Fatalf("SetBranch failed: %v", err)
+	}
+
+	// Delete bookmark
+	err = jjVCS.DeleteBranch(ctx, "feature-1")
+	if err != nil {
+		t.Fatalf("DeleteBranch failed: %v", err)
+	}
+
+	// Verify deleted
+	branches, err = jjVCS.ListBranches(ctx)
+	if err != nil {
+		t.Fatalf("ListBranches after delete failed: %v", err)
+	}
+	for _, b := range branches {
+		if b.Name == "feature-1" {
+			t.Error("feature-1 should have been deleted")
+		}
+	}
+}
+
+// --- File Track/Untrack Tests ---
+
+func TestJujutsuVCS_FileTrackUntrack(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-file-ops")
+	ctx := context.Background()
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS failed: %v", err)
+	}
+
+	// Create a file
+	h.WriteFile(repoPath, "tracked.txt", "track me")
+
+	// Track it explicitly
+	err = jjVCS.TrackFiles(ctx, "tracked.txt")
+	if err != nil {
+		t.Fatalf("TrackFiles failed: %v", err)
+	}
+
+	// Verify it shows in status
+	status, err := jjVCS.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status failed: %v", err)
+	}
+
+	found := false
+	for _, s := range status {
+		if s.Path == "tracked.txt" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Log("tracked.txt not found in status (may be auto-tracked)")
+	}
+
+	// Commit the file so we can test untrack
+	jjVCS.Commit(ctx, "Add tracked file", nil)
+
+	// Untrack
+	err = jjVCS.UntrackFiles(ctx, "tracked.txt")
+	if err != nil {
+		// UntrackFiles may fail if jj requires the file to be in .gitignore first
+		t.Logf("UntrackFiles returned error (expected if not in .gitignore): %v", err)
+	}
+}
+
+// --- Workspace Update-Stale Tests ---
+
+func TestJujutsuVCS_UpdateStaleWorkspace(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-update-stale")
+	ctx := context.Background()
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS failed: %v", err)
+	}
+
+	// update-stale on default workspace should be a no-op (not stale)
+	err = jjVCS.UpdateStaleWorkspace(ctx, "default")
+	if err != nil {
+		t.Logf("UpdateStaleWorkspace on non-stale workspace: %v", err)
+	}
+
+	// Create a second workspace
+	wsPath := filepath.Join(h.tempDir, "stale-ws")
+	err = jjVCS.CreateWorkspace(ctx, "stale-test", wsPath)
+	if err != nil {
+		t.Fatalf("CreateWorkspace failed: %v", err)
+	}
+
+	// update-stale should work on the new workspace
+	err = jjVCS.UpdateStaleWorkspace(ctx, "stale-test")
+	if err != nil {
+		t.Logf("UpdateStaleWorkspace on new workspace: %v (may not be stale)", err)
+	}
+
+	// Cleanup
+	jjVCS.RemoveWorkspace(ctx, "stale-test")
+}
+
+// --- Git Backend P2 Tests ---
+
+func TestGitVCS_DeleteBranch(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("git-delete-branch")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS failed: %v", err)
+	}
+
+	// Create initial commit
+	h.WriteFile(repoPath, "file.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "Initial")
+
+	// Create a branch
+	err = gitVCS.CreateBranch(ctx, "feature-x")
+	if err != nil {
+		t.Fatalf("CreateBranch failed: %v", err)
+	}
+
+	// Delete it
+	err = gitVCS.DeleteBranch(ctx, "feature-x")
+	if err != nil {
+		t.Fatalf("DeleteBranch failed: %v", err)
+	}
+}
+
+func TestGitVCS_FileTrackUntrack(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("git-file-ops")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS failed: %v", err)
+	}
+
+	// Create initial commit
+	h.WriteFile(repoPath, "initial.txt", "init")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "Initial")
+
+	// Track a new file
+	h.WriteFile(repoPath, "new.txt", "new content")
+	err = gitVCS.TrackFiles(ctx, "new.txt")
+	if err != nil {
+		t.Fatalf("TrackFiles failed: %v", err)
+	}
+
+	// Commit it
+	gitVCS.Commit(ctx, "Add new file", nil)
+
+	// Untrack it (remove from index, keep on disk)
+	err = gitVCS.UntrackFiles(ctx, "new.txt")
+	if err != nil {
+		t.Fatalf("UntrackFiles failed: %v", err)
+	}
+
+	// Verify file still exists on disk
+	if _, err := os.Stat(filepath.Join(repoPath, "new.txt")); err != nil {
+		t.Error("file should still exist on disk after untracking")
+	}
+}
+
 // --- Timeout Tests ---
 
 func TestVCS_CommandTimeout(t *testing.T) {

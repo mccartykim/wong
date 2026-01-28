@@ -202,6 +202,49 @@ type VCS interface {
 	// Edit sets a change as the working copy target.
 	// For git: git checkout. For jj: jj edit.
 	Edit(ctx context.Context, id string) error
+
+	// --- Stack Navigation ---
+
+	// Next moves to the next (child) change in the stack.
+	// For git: checkout to next unpushed commit. For jj: jj next.
+	Next(ctx context.Context) (*ChangeInfo, error)
+
+	// Prev moves to the previous (parent) change in the stack.
+	// For git: checkout to parent commit. For jj: jj prev.
+	Prev(ctx context.Context) (*ChangeInfo, error)
+
+	// --- Extended Workspace Operations ---
+
+	// UpdateStaleWorkspace refreshes a workspace whose working copy is stale.
+	// For jj: jj workspace update-stale. For git: git worktree repair.
+	UpdateStaleWorkspace(ctx context.Context, name string) error
+
+	// --- Extended Bookmark/Branch Operations ---
+
+	// DeleteBranch deletes a branch (git) or bookmark (jj).
+	DeleteBranch(ctx context.Context, name string) error
+
+	// MoveBranch moves a bookmark to the current change (jj) or resets a branch (git).
+	MoveBranch(ctx context.Context, name string, to string) error
+
+	// SetBranch sets a bookmark to a specific revision (jj-specific, alias for MoveBranch in git).
+	SetBranch(ctx context.Context, name string, to string) error
+
+	// TrackBranch starts tracking a remote bookmark/branch.
+	TrackBranch(ctx context.Context, name string, remote string) error
+
+	// UntrackBranch stops tracking a remote bookmark/branch.
+	UntrackBranch(ctx context.Context, name string, remote string) error
+
+	// --- File Operations ---
+
+	// TrackFiles explicitly starts tracking files.
+	// For git: git add. For jj: jj file track.
+	TrackFiles(ctx context.Context, paths ...string) error
+
+	// UntrackFiles stops tracking files without deleting them.
+	// For git: git rm --cached. For jj: jj file untrack.
+	UntrackFiles(ctx context.Context, paths ...string) error
 }
 
 // CommitOptions provides additional options for commits.

@@ -627,6 +627,137 @@ func (j *JujutsuVCS) Edit(ctx context.Context, id string) error {
 	return err
 }
 
+// --- Stack Navigation ---
+
+// Next moves to the next (child) change in the stack.
+func (j *JujutsuVCS) Next(ctx context.Context) (*ChangeInfo, error) {
+	_, err := j.runJJ(ctx, "next")
+	if err != nil {
+		return nil, err
+	}
+	return j.CurrentChange(ctx)
+}
+
+// Prev moves to the previous (parent) change in the stack.
+func (j *JujutsuVCS) Prev(ctx context.Context) (*ChangeInfo, error) {
+	_, err := j.runJJ(ctx, "prev")
+	if err != nil {
+		return nil, err
+	}
+	return j.CurrentChange(ctx)
+}
+
+// --- Extended Workspace Operations ---
+
+// UpdateStaleWorkspace refreshes a workspace whose working copy is stale.
+func (j *JujutsuVCS) UpdateStaleWorkspace(ctx context.Context, name string) error {
+	if name == "" || name == "default" {
+		_, err := j.runJJ(ctx, "workspace", "update-stale")
+		return err
+	}
+	// For a specific workspace, run update-stale from that workspace's directory
+	workspaces, err := j.ListWorkspaces(ctx)
+	if err != nil {
+		return err
+	}
+	for _, ws := range workspaces {
+		if ws.Name == name {
+			// Check if workspace path exists
+			if _, statErr := os.Stat(ws.Path); statErr != nil {
+				// Workspace path doesn't exist, run from repo root
+				_, err := j.runJJ(ctx, "workspace", "update-stale")
+				return err
+			}
+			cmd := exec.CommandContext(ctx, "jj", "workspace", "update-stale")
+			cmd.Dir = ws.Path
+			cmd.Env = os.Environ()
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err != nil {
+				return &CommandError{
+					VCS:     VCSTypeJujutsu,
+					Command: "jj",
+					Args:    []string{"workspace", "update-stale"},
+					Stderr:  stderr.String(),
+					Err:     err,
+				}
+			}
+			return nil
+		}
+	}
+	return ErrWorkspaceNotFound
+}
+
+// --- Extended Bookmark Operations ---
+
+// DeleteBranch deletes a bookmark.
+func (j *JujutsuVCS) DeleteBranch(ctx context.Context, name string) error {
+	_, err := j.runJJ(ctx, "bookmark", "delete", name)
+	return err
+}
+
+// MoveBranch moves a bookmark to the specified revision.
+func (j *JujutsuVCS) MoveBranch(ctx context.Context, name string, to string) error {
+	args := []string{"bookmark", "move", name}
+	if to != "" {
+		args = append(args, "--to", to)
+	}
+	_, err := j.runJJ(ctx, args...)
+	return err
+}
+
+// SetBranch sets a bookmark to a specific revision.
+func (j *JujutsuVCS) SetBranch(ctx context.Context, name string, to string) error {
+	args := []string{"bookmark", "set", name}
+	if to != "" {
+		args = append(args, "-r", to)
+	}
+	_, err := j.runJJ(ctx, args...)
+	return err
+}
+
+// TrackBranch starts tracking a remote bookmark.
+func (j *JujutsuVCS) TrackBranch(ctx context.Context, name string, remote string) error {
+	ref := name
+	if remote != "" {
+		ref = name + "@" + remote
+	}
+	_, err := j.runJJ(ctx, "bookmark", "track", ref)
+	return err
+}
+
+// UntrackBranch stops tracking a remote bookmark.
+func (j *JujutsuVCS) UntrackBranch(ctx context.Context, name string, remote string) error {
+	ref := name
+	if remote != "" {
+		ref = name + "@" + remote
+	}
+	_, err := j.runJJ(ctx, "bookmark", "untrack", ref)
+	return err
+}
+
+// --- File Operations ---
+
+// TrackFiles explicitly starts tracking files.
+func (j *JujutsuVCS) TrackFiles(ctx context.Context, paths ...string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	args := append([]string{"file", "track"}, paths...)
+	_, err := j.runJJ(ctx, args...)
+	return err
+}
+
+// UntrackFiles stops tracking files without deleting them.
+func (j *JujutsuVCS) UntrackFiles(ctx context.Context, paths ...string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	args := append([]string{"file", "untrack"}, paths...)
+	_, err := j.runJJ(ctx, args...)
+	return err
+}
+
 // --- jj-specific helper methods not in VCS interface ---
 
 // Describe updates the description of the current change.

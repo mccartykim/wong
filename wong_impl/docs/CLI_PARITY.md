@@ -15,7 +15,7 @@ This document tracks which jj CLI commands are implemented, planned, or out of s
 | `abandon` | ✅ | `JujutsuVCS.Abandon()` | Abandons changes |
 | `absorb` | ⏸️ | - | Advanced stacking feature |
 | `bisect` | ❌ | - | Not needed for beads workflow |
-| `bookmark` | ✅ | `ListBranches()`, `CreateBranch()` | Maps to branches in interface |
+| `bookmark` | ✅ | `ListBranches()`, `CreateBranch()`, `DeleteBranch()`, `MoveBranch()`, `SetBranch()`, `TrackBranch()`, `UntrackBranch()` | Full bookmark management |
 | `commit` | ✅ | `Commit()` | Creates new change |
 | `config` | ❌ | - | User manages config directly |
 | `describe` | ✅ | `JujutsuVCS.Describe()` | Update change description |
@@ -24,7 +24,7 @@ This document tracks which jj CLI commands are implemented, planned, or out of s
 | `duplicate` | ⏸️ | - | Could be useful for subtasks |
 | `edit` | ✅ | `Edit()` | Set working copy target |
 | `evolog` | ❌ | - | Debugging/history exploration |
-| `file` | 🔄 | - | File operations (track, untrack, etc.) |
+| `file` | ✅ | `TrackFiles()`, `UntrackFiles()`, `GetFileVersion()` | File operations |
 | `fix` | ❌ | - | Formatting tool integration |
 | `gerrit` | ❌ | - | Gerrit-specific |
 | `git` | ✅ | `GitExport()`, `GitImport()`, `Fetch()`, `Push()` | Git interop |
@@ -33,10 +33,10 @@ This document tracks which jj CLI commands are implemented, planned, or out of s
 | `log` | ✅ | `Log()` | Show history |
 | `metaedit` | ⏸️ | - | Metadata editing |
 | `new` | ✅ | `New()` | Create new change |
-| `next` | 🔄 | - | Navigate stack down |
+| `next` | ✅ | `Next()` | Navigate stack down |
 | `operation` | ⏸️ | - | Operation log (undo/redo) |
 | `parallelize` | ⏸️ | - | Advanced stacking |
-| `prev` | 🔄 | - | Navigate stack up |
+| `prev` | ✅ | `Prev()` | Navigate stack up |
 | `rebase` | ✅ | `JujutsuVCS.Rebase()` | Move changes |
 | `redo` | ⏸️ | - | Redo operation |
 | `resolve` | ✅ | `MarkResolved()`, `GetConflicts()` | Conflict resolution |
@@ -55,7 +55,7 @@ This document tracks which jj CLI commands are implemented, planned, or out of s
 | `unsign` | ❌ | - | Remove signatures |
 | `util` | ❌ | - | Shell completions etc. |
 | `version` | ❌ | - | Version info |
-| `workspace` | ✅ | `ListWorkspaces()`, `CreateWorkspace()`, `RemoveWorkspace()` | Core for subtask orchestration |
+| `workspace` | ✅ | `ListWorkspaces()`, `CreateWorkspace()`, `RemoveWorkspace()`, `UpdateStaleWorkspace()` | Core for subtask orchestration |
 
 ## Git Subcommands
 
@@ -78,21 +78,21 @@ This document tracks which jj CLI commands are implemented, planned, or out of s
 | `workspace forget` | ✅ | `RemoveWorkspace()` | Remove workspace |
 | `workspace list` | ✅ | `ListWorkspaces()` | List workspaces |
 | `workspace root` | ✅ | `RepoRoot()` | Get root path |
-| `workspace update-stale` | 🔄 | - | Handle stale workspaces |
+| `workspace update-stale` | ✅ | `UpdateStaleWorkspace()` | Handle stale workspaces |
 
 ## Bookmark Subcommands
 
 | jj bookmark Command | Status | Wong Method | Notes |
 |---------------------|--------|-------------|-------|
 | `bookmark create` | ✅ | `CreateBranch()` | Create bookmark |
-| `bookmark delete` | 🔄 | - | Delete bookmark |
+| `bookmark delete` | ✅ | `DeleteBranch()` | Delete bookmark |
 | `bookmark forget` | 🔄 | - | Forget bookmark |
 | `bookmark list` | ✅ | `ListBranches()` | List bookmarks |
-| `bookmark move` | 🔄 | - | Move bookmark |
+| `bookmark move` | ✅ | `MoveBranch()` | Move bookmark |
 | `bookmark rename` | 🔄 | - | Rename bookmark |
-| `bookmark set` | 🔄 | - | Set bookmark |
-| `bookmark track` | 🔄 | - | Track remote |
-| `bookmark untrack` | 🔄 | - | Untrack remote |
+| `bookmark set` | ✅ | `SetBranch()` | Set bookmark |
+| `bookmark track` | ✅ | `TrackBranch()` | Track remote |
+| `bookmark untrack` | ✅ | `UntrackBranch()` | Untrack remote |
 
 ## File Subcommands
 
@@ -102,8 +102,8 @@ This document tracks which jj CLI commands are implemented, planned, or out of s
 | `file chmod` | ❌ | - | Change permissions |
 | `file list` | ⏸️ | - | List files |
 | `file show` | ✅ | `GetFileVersion()` | Show file at revision |
-| `file track` | 🔄 | `Stage()` | Track files |
-| `file untrack` | 🔄 | - | Untrack files |
+| `file track` | ✅ | `TrackFiles()` | Track files |
+| `file untrack` | ✅ | `UntrackFiles()` | Untrack files |
 
 ## Priority Summary
 
@@ -113,12 +113,12 @@ This document tracks which jj CLI commands are implemented, planned, or out of s
 - `git fetch/push/export/import`
 - `squash`, `new`, `edit`, `rebase`, `abandon`
 
-### P1 - Stack Navigation (🔄 Planned)
+### P1 - Stack Navigation & File Ops (✅ Done)
 - `next`, `prev` - Navigate change stack
 - `workspace update-stale` - Handle stale workspaces
 - `file track/untrack` - File management
 
-### P2 - Bookmark Management (🔄 Planned)
+### P2 - Bookmark Management (✅ Done)
 - `bookmark delete/move/set/track/untrack`
 
 ### P3 - Advanced Features (⏸️ Deferred)
@@ -135,11 +135,11 @@ This document tracks which jj CLI commands are implemented, planned, or out of s
 
 | Category | Implemented | Planned | Deferred | Out of Scope | Total |
 |----------|-------------|---------|----------|--------------|-------|
-| Core | 18 | 2 | 11 | 9 | 40 |
+| Core | 22 | 0 | 11 | 9 | 42 |
 | Git | 5 | 0 | 0 | 3 | 8 |
-| Workspace | 4 | 1 | 0 | 0 | 5 |
-| Bookmark | 2 | 7 | 0 | 0 | 9 |
-| File | 1 | 2 | 1 | 2 | 6 |
-| **Total** | **30** | **12** | **12** | **14** | **68** |
+| Workspace | 5 | 0 | 0 | 0 | 5 |
+| Bookmark | 7 | 2 | 0 | 0 | 9 |
+| File | 3 | 0 | 1 | 2 | 6 |
+| **Total** | **42** | **2** | **12** | **14** | **70** |
 
-**Coverage: 44% implemented, 62% with planned**
+**Coverage: 60% implemented, 63% with planned**

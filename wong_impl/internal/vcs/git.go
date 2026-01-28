@@ -640,5 +640,110 @@ func (g *GitVCS) Edit(ctx context.Context, id string) error {
 	return err
 }
 
+// --- Stack Navigation ---
+
+// Next moves to the next (child) commit in the stack.
+// For git, this walks to a child commit on the current branch.
+func (g *GitVCS) Next(ctx context.Context) (*ChangeInfo, error) {
+	// Get current HEAD
+	head, err := g.runGit(ctx, "rev-parse", "HEAD")
+	if err != nil {
+		return nil, err
+	}
+
+	branch, err := g.CurrentBranch(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Find child commit: commits whose parent is HEAD and are ancestors of branch tip
+	output, err := g.runGit(ctx, "log", "--reverse", "--ancestry-path", "--format=%H",
+		head+".."+branch)
+	if err != nil || output == "" {
+		return nil, &CommandError{VCS: VCSTypeGit, Command: "next",
+			Err: ErrCommandFailed, Stderr: "no next commit in stack"}
+	}
+
+	// Take the first child
+	childHash := strings.Split(output, "\n")[0]
+	_, err = g.runGit(ctx, "checkout", childHash)
+	if err != nil {
+		return nil, err
+	}
+
+	return g.CurrentChange(ctx)
+}
+
+// Prev moves to the previous (parent) commit.
+func (g *GitVCS) Prev(ctx context.Context) (*ChangeInfo, error) {
+	_, err := g.runGit(ctx, "checkout", "HEAD~1")
+	if err != nil {
+		return nil, err
+	}
+	return g.CurrentChange(ctx)
+}
+
+// --- Extended Workspace Operations ---
+
+// UpdateStaleWorkspace repairs a stale worktree.
+func (g *GitVCS) UpdateStaleWorkspace(ctx context.Context, name string) error {
+	_, err := g.runGit(ctx, "worktree", "repair")
+	return err
+}
+
+// --- Extended Bookmark/Branch Operations ---
+
+// DeleteBranch deletes a branch.
+func (g *GitVCS) DeleteBranch(ctx context.Context, name string) error {
+	_, err := g.runGit(ctx, "branch", "-d", name)
+	return err
+}
+
+// MoveBranch moves a branch to a specific commit.
+func (g *GitVCS) MoveBranch(ctx context.Context, name string, to string) error {
+	if to == "" {
+		to = "HEAD"
+	}
+	_, err := g.runGit(ctx, "branch", "-f", name, to)
+	return err
+}
+
+// SetBranch sets a branch to a specific commit (same as MoveBranch for git).
+func (g *GitVCS) SetBranch(ctx context.Context, name string, to string) error {
+	return g.MoveBranch(ctx, name, to)
+}
+
+// TrackBranch sets up tracking for a remote branch.
+func (g *GitVCS) TrackBranch(ctx context.Context, name string, remote string) error {
+	if remote == "" {
+		remote = "origin"
+	}
+	_, err := g.runGit(ctx, "branch", "--set-upstream-to="+remote+"/"+name, name)
+	return err
+}
+
+// UntrackBranch removes tracking for a remote branch.
+func (g *GitVCS) UntrackBranch(ctx context.Context, name string, remote string) error {
+	_, err := g.runGit(ctx, "branch", "--unset-upstream", name)
+	return err
+}
+
+// --- File Operations ---
+
+// TrackFiles starts tracking files (git add).
+func (g *GitVCS) TrackFiles(ctx context.Context, paths ...string) error {
+	return g.Stage(ctx, paths...)
+}
+
+// UntrackFiles stops tracking files without deleting them.
+func (g *GitVCS) UntrackFiles(ctx context.Context, paths ...string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	args := append([]string{"rm", "--cached"}, paths...)
+	_, err := g.runGit(ctx, args...)
+	return err
+}
+
 // Ensure GitVCS implements VCS.
 var _ VCS = (*GitVCS)(nil)
