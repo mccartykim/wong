@@ -2302,3 +2302,615 @@ func TestGitVCS_GetRemoteURLs(t *testing.T) {
 		t.Errorf("expected origin URL, got %v", urls)
 	}
 }
+
+// --- wong-bpg.1: Error path tests ---
+
+func TestGitVCS_NewGitVCS_InvalidPath(t *testing.T) {
+	// NewGitVCS with a non-existent path should fail
+	_, err := NewGitVCS("/nonexistent/path/that/does/not/exist")
+	if err == nil {
+		t.Error("expected error for non-existent path")
+	}
+}
+
+func TestGitVCS_NewGitVCS_NotARepo(t *testing.T) {
+	// NewGitVCS with a regular directory (not a git repo) should fail
+	dir, err := os.MkdirTemp("", "not-a-repo-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer os.RemoveAll(dir)
+
+	_, err = NewGitVCS(dir)
+	if err == nil {
+		t.Error("expected error for non-repo directory")
+	}
+}
+
+func TestGitVCS_ShowFile_NonExistentFile(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	// Need at least one commit
+	h.WriteFile(repoPath, "exists.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Try to show a file that doesn't exist
+	_, err = gitVCS.ShowFile(ctx, "HEAD", "does-not-exist.txt")
+	if err == nil {
+		t.Error("expected error for non-existent file in ShowFile")
+	}
+}
+
+func TestGitVCS_ShowFile_InvalidRef(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "test.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Try with a bad ref
+	_, err = gitVCS.ShowFile(ctx, "nonexistent-ref", "test.txt")
+	if err == nil {
+		t.Error("expected error for invalid ref in ShowFile")
+	}
+}
+
+func TestGitVCS_ResolveRef_InvalidRef(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "test.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	_, err = gitVCS.ResolveRef(ctx, "nonexistent-branch-xyz")
+	if err == nil {
+		t.Error("expected error for invalid ref in ResolveRef")
+	}
+}
+
+func TestGitVCS_Checkout_InvalidRef(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "test.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "trunk")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	err = gitVCS.Checkout(ctx, "nonexistent-branch-xyz")
+	if err == nil {
+		t.Error("expected error for checkout of invalid ref")
+	}
+}
+
+func TestGitVCS_BranchExists_NonExistent(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "test.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "trunk")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	exists, err := gitVCS.BranchExists(ctx, "nonexistent-branch")
+	if err != nil {
+		t.Fatalf("BranchExists: %v", err)
+	}
+	if exists {
+		t.Error("expected branch to not exist")
+	}
+
+	exists, err = gitVCS.BranchExists(ctx, "trunk")
+	if err != nil {
+		t.Fatalf("BranchExists trunk: %v", err)
+	}
+	if !exists {
+		t.Error("expected trunk branch to exist")
+	}
+}
+
+func TestGitVCS_GetRemoteURL_NoRemote(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	_, err = gitVCS.GetRemoteURL(ctx, "origin")
+	if err == nil {
+		t.Error("expected error for non-existent remote")
+	}
+}
+
+func TestGitVCS_GetUpstream_NoBranch(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "test.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "trunk")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// No upstream configured
+	_, err = gitVCS.GetUpstream(ctx)
+	if err == nil {
+		t.Error("expected error for branch with no upstream")
+	}
+}
+
+func TestGitVCS_IsFileTracked_Untracked(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	// Create file but don't track it
+	h.WriteFile(repoPath, "untracked.txt", "content")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	tracked, err := gitVCS.IsFileTracked(ctx, "untracked.txt")
+	if err != nil {
+		t.Fatalf("IsFileTracked: %v", err)
+	}
+	if tracked {
+		t.Error("expected untracked file to not be tracked")
+	}
+}
+
+func TestGitVCS_CheckIgnore_NotIgnored(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	// Create a file and commit it (not ignored)
+	h.WriteFile(repoPath, "tracked.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	ignored, err := gitVCS.CheckIgnore(ctx, "tracked.txt")
+	if err != nil {
+		t.Fatalf("CheckIgnore: %v", err)
+	}
+	if ignored {
+		t.Error("expected tracked file to not be ignored")
+	}
+
+	// Now create .gitignore and check ignored file
+	h.WriteFile(repoPath, ".gitignore", "*.log\n")
+	h.WriteFile(repoPath, "debug.log", "log content")
+
+	ignored, err = gitVCS.CheckIgnore(ctx, "debug.log")
+	if err != nil {
+		t.Fatalf("CheckIgnore ignored file: %v", err)
+	}
+	if !ignored {
+		t.Error("expected .log file to be ignored")
+	}
+}
+
+func TestGitVCS_MergeBase_NoCommonAncestor(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "test.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "trunk")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Create an orphan branch with no common ancestor
+	h.runCmd(repoPath, "git", "checkout", "--orphan", "orphan")
+	h.WriteFile(repoPath, "orphan.txt", "orphan content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "orphan commit")
+
+	_, err = gitVCS.MergeBase(ctx, "trunk", "orphan")
+	if err == nil {
+		t.Error("expected error for branches with no common ancestor")
+	}
+}
+
+func TestGitVCS_Stage_NonExistentFile(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	err = gitVCS.Stage(ctx, "does-not-exist.txt")
+	if err == nil {
+		t.Error("expected error staging non-existent file")
+	}
+}
+
+func TestGitVCS_Commit_EmptyRepo(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Committing with nothing staged should fail
+	err = gitVCS.Commit(ctx, "empty commit", nil)
+	if err == nil {
+		t.Error("expected error committing with nothing staged")
+	}
+}
+
+func TestGitVCS_Push_NoRemote(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "test.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "trunk")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Push with no remote configured should fail
+	err = gitVCS.Push(ctx, "origin", "trunk")
+	if err == nil {
+		t.Error("expected error pushing with no remote")
+	}
+}
+
+func TestGitVCS_RestoreFile_NoChanges(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "test.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Restoring a file with no changes should be a no-op (not error)
+	err = gitVCS.RestoreFile(ctx, "test.txt")
+	if err != nil {
+		t.Errorf("RestoreFile on clean file: %v", err)
+	}
+
+	// Modify, then restore
+	h.WriteFile(repoPath, "test.txt", "modified")
+	err = gitVCS.RestoreFile(ctx, "test.txt")
+	if err != nil {
+		t.Fatalf("RestoreFile: %v", err)
+	}
+
+	// Verify content was restored
+	data, _ := os.ReadFile(filepath.Join(repoPath, "test.txt"))
+	if string(data) != "content" {
+		t.Errorf("expected 'content' after restore, got %q", string(data))
+	}
+}
+
+func TestGitVCS_Status_CleanRepo(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "test.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	entries, err := gitVCS.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected clean status, got %d entries", len(entries))
+	}
+}
+
+func TestGitVCS_Status_WithChanges(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "test.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	// Modify file and create new untracked file
+	h.WriteFile(repoPath, "test.txt", "modified")
+	h.WriteFile(repoPath, "new.txt", "new content")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	entries, err := gitVCS.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if len(entries) < 2 {
+		t.Errorf("expected at least 2 status entries (modified + untracked), got %d", len(entries))
+	}
+
+	// Check that we have both modified and untracked
+	hasModified, hasUntracked := false, false
+	for _, e := range entries {
+		if strings.Contains(e.Path, "test.txt") && e.Status == FileStatusModified {
+			hasModified = true
+		}
+		if strings.Contains(e.Path, "new.txt") && e.Status == FileStatusUntracked {
+			hasUntracked = true
+		}
+	}
+	if !hasModified {
+		// Debug: print all entries for diagnosis
+		for _, e := range entries {
+			t.Logf("  entry: path=%q status=%q staged=%v", e.Path, e.Status, e.Staged)
+		}
+		t.Error("expected modified status for test.txt")
+	}
+	if !hasUntracked {
+		t.Error("expected untracked status for new.txt")
+	}
+}
+
+func TestGitVCS_DeleteBranch_NonExistent(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "test.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "trunk")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	err = gitVCS.DeleteBranch(ctx, "does-not-exist")
+	if err == nil {
+		t.Error("expected error deleting non-existent branch")
+	}
+}
+
+func TestGitVCS_CommandError_Type(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// This should return a *CommandError for invalid ref
+	h.WriteFile(repoPath, "test.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	_, err = gitVCS.ResolveRef(ctx, "nonexistent-ref-xyz")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if _, ok := err.(*CommandError); !ok {
+		t.Errorf("expected *CommandError, got %T: %v", err, err)
+	}
+}
+
+func TestGitVCS_ContextCancellation(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Create an already-cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Operations with cancelled context should fail
+	_, err = gitVCS.Status(ctx)
+	if err == nil {
+		t.Error("expected error with cancelled context")
+	}
+}
+
+func TestGitVCS_HasRemote_None(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	hasRemote, err := gitVCS.HasRemote(ctx)
+	if err != nil {
+		t.Fatalf("HasRemote: %v", err)
+	}
+	if hasRemote {
+		t.Error("expected no remote in fresh repo")
+	}
+
+	// Add a remote
+	h.runCmd(repoPath, "git", "remote", "add", "origin", "https://example.com/repo.git")
+
+	hasRemote, err = gitVCS.HasRemote(ctx)
+	if err != nil {
+		t.Fatalf("HasRemote after add: %v", err)
+	}
+	if !hasRemote {
+		t.Error("expected remote after adding origin")
+	}
+}
+
+func TestGitVCS_CurrentBranch_EmptyRepo(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Empty repo (no commits) - CurrentBranch behavior varies
+	_, err = gitVCS.CurrentBranch(ctx)
+	// Some git versions return the unborn branch name, others error
+	// We just verify it doesn't panic
+	_ = err
+}
+
+func TestGitVCS_GetConfig_NonExistent(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	_, err = gitVCS.GetConfig(ctx, "nonexistent.key.that.does.not.exist")
+	if err == nil {
+		t.Error("expected error for non-existent config key")
+	}
+}
+
+func TestGitVCS_SetConfig_AndGet(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Set a custom config
+	err = gitVCS.SetConfig(ctx, "test.key", "test-value")
+	if err != nil {
+		t.Fatalf("SetConfig: %v", err)
+	}
+
+	// Read it back
+	val, err := gitVCS.GetConfig(ctx, "test.key")
+	if err != nil {
+		t.Fatalf("GetConfig: %v", err)
+	}
+	if val != "test-value" {
+		t.Errorf("expected 'test-value', got %q", val)
+	}
+}
+
+func TestGitVCS_DiffHasChanges_Clean(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "test.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "trunk")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// No changes since HEAD
+	hasChanges, err := gitVCS.DiffHasChanges(ctx, "HEAD", "test.txt")
+	if err != nil {
+		t.Fatalf("DiffHasChanges: %v", err)
+	}
+	if hasChanges {
+		t.Error("expected no changes for clean file")
+	}
+
+	// Now modify
+	h.WriteFile(repoPath, "test.txt", "modified")
+	hasChanges, err = gitVCS.DiffHasChanges(ctx, "HEAD", "test.txt")
+	if err != nil {
+		t.Fatalf("DiffHasChanges after modify: %v", err)
+	}
+	if !hasChanges {
+		t.Error("expected changes after modification")
+	}
+}

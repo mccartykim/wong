@@ -110,12 +110,24 @@ func (g *GitVCS) CurrentChange(ctx context.Context) (*ChangeInfo, error) {
 
 // Status returns the working copy status.
 func (g *GitVCS) Status(ctx context.Context) ([]StatusEntry, error) {
-	output, err := g.runGit(ctx, "status", "--porcelain", "-z")
-	if err != nil {
-		return nil, err
+	// Use Command directly instead of runGit to avoid TrimSpace corrupting
+	// the porcelain -z output (leading spaces are significant status chars).
+	cmd := g.Command(ctx, "status", "--porcelain", "-z")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, &CommandError{
+			VCS:     VCSTypeGit,
+			Command: "git",
+			Args:    []string{"status", "--porcelain", "-z"},
+			Stderr:  stderr.String(),
+			Err:     err,
+		}
 	}
+	output := stdout.String()
 
-	if output == "" {
+	if strings.TrimSpace(output) == "" {
 		return []StatusEntry{}, nil
 	}
 
