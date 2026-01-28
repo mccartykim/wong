@@ -396,3 +396,136 @@ func vcsFullSync(ctx context.Context, message string) error {
 	// 3. Push
 	return vcsPush(ctx)
 }
+
+// --- Phase 1c: Bridge functions for sync_git.go migration ---
+// These functions match the signatures of sync_git.go functions so callers
+// can switch from git* to vcs* with minimal code changes.
+
+// vcsHasRemoteSimple returns true if a remote exists. Simple bool return for
+// compatibility with hasGitRemote() callers.
+func vcsHasRemoteSimple(ctx context.Context) bool {
+	has, err := vcsHasUpstream()
+	if err != nil {
+		return false
+	}
+	return has
+}
+
+// vcsHasUpstreamSimple returns true if the current branch has upstream tracking.
+// Simple bool return for compatibility with gitHasUpstream() callers.
+func vcsHasUpstreamSimple() bool {
+	ctx := context.Background()
+	has, err := vcsBranchHasUpstream(ctx)
+	if err != nil {
+		return false
+	}
+	return has
+}
+
+// vcsNamedBranchHasUpstream checks if a specific named branch has upstream tracking.
+// Matches gitBranchHasUpstream(branch) signature.
+func vcsNamedBranchHasUpstream(branch string) bool {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return false
+	}
+
+	ctx := context.Background()
+	if vc.IsJujutsu() {
+		// jj: check if remote exists (bookmarks track remotes)
+		hasRemote, err := vc.VcsHasRemote(ctx)
+		return err == nil && hasRemote
+	}
+
+	// Git: check branch.{name}.remote and branch.{name}.merge config
+	_, remoteErr := vc.VcsGetConfig(ctx, "branch."+branch+".remote")
+	_, mergeErr := vc.VcsGetConfig(ctx, "branch."+branch+".merge")
+	return remoteErr == nil && mergeErr == nil
+}
+
+// vcsPullWithRemote pulls from the remote, optionally overriding the remote name.
+// If configuredRemote is non-empty, uses that remote instead of the default.
+// Matches gitPull(ctx, configuredRemote) signature.
+func vcsPullWithRemote(ctx context.Context, configuredRemote string) error {
+	// Check if any remote exists (support local-only repos)
+	if !vcsHasRemoteSimple(ctx) {
+		return nil // Gracefully skip - local-only mode
+	}
+
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return fmt.Errorf("getting VCS context: %w", err)
+	}
+
+	branch, err := vc.VcsCurrentBranch(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get current branch: %w", err)
+	}
+
+	// Determine remote: use configured override, or detect from VCS
+	remote := configuredRemote
+	if remote == "" {
+		r, err := vc.VcsGetRemote(ctx)
+		if err != nil {
+			remote = "origin" // fallback
+		} else {
+			remote = r
+		}
+	}
+
+	return vc.VCS.Pull(ctx, remote, branch)
+}
+
+// vcsPushWithRemote pushes to the remote, optionally overriding the remote name.
+// If configuredRemote is non-empty, pushes to that remote explicitly.
+// Matches gitPush(ctx, configuredRemote) signature.
+func vcsPushWithRemote(ctx context.Context, configuredRemote string) error {
+	// Check if any remote exists (support local-only repos)
+	if !vcsHasRemoteSimple(ctx) {
+		return nil // Gracefully skip - local-only mode
+	}
+
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return fmt.Errorf("getting VCS context: %w", err)
+	}
+
+	// If configuredRemote is set, push to that remote with current branch
+	if configuredRemote != "" {
+		branch, err := vc.VcsCurrentBranch(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get current branch: %w", err)
+		}
+		return vc.VCS.Push(ctx, configuredRemote, branch)
+	}
+
+	// Default: use VCS default push behavior
+	return vc.VcsPush(ctx)
+}
+
+// vcsHasUncommittedBeadsChanges checks if .beads/issues.jsonl has uncommitted changes.
+// VCS-agnostic replacement for gitHasUncommittedBeadsChanges.
+func vcsHasUncommittedBeadsChanges(ctx context.Context) (bool, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return false, nil // No VCS context, nothing to check
+	}
+
+	jsonlPath := ".beads/issues.jsonl"
+	entry, err := vc.VcsStatusPath(ctx, jsonlPath)
+	if err != nil {
+		return false, fmt.Errorf("VCS status failed: %w", err)
+	}
+
+	return entry.Status != vcs.FileStatusUnmodified, nil
+}
+
+// vcsGetDefaultBranchForRemote returns the default branch for a specific remote.
+// Returns a plain string (not error) for compatibility with getDefaultBranchForRemote.
+func vcsGetDefaultBranchForRemote(ctx context.Context, remote string) string {
+	branch, err := vcsGetDefaultBranch(ctx, remote)
+	if err != nil {
+		return "main"
+	}
+	return branch
+}
