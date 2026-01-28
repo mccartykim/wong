@@ -428,6 +428,38 @@ func (vc *VCSContext) VcsDeleteBranch(ctx context.Context, name string) error {
 	return vc.VCS.DeleteBranch(ctx, name)
 }
 
+// --- Phase 5: Remaining production abstractions ---
+
+// VcsShowFile reads file content from a specific ref.
+func (vc *VCSContext) VcsShowFile(ctx context.Context, ref, path string) ([]byte, error) {
+	return vc.VCS.ShowFile(ctx, ref, path)
+}
+
+// VcsGetVCSDir returns the per-worktree VCS directory.
+func (vc *VCSContext) VcsGetVCSDir(ctx context.Context) (string, error) {
+	return vc.VCS.GetVCSDir(ctx)
+}
+
+// VcsIsWorktreeRepo returns true if this is a worktree/non-default workspace.
+func (vc *VCSContext) VcsIsWorktreeRepo(ctx context.Context) (bool, error) {
+	return vc.VCS.IsWorktreeRepo(ctx)
+}
+
+// VcsCheckout switches the working copy to a different ref.
+func (vc *VCSContext) VcsCheckout(ctx context.Context, ref string) error {
+	return vc.VCS.Checkout(ctx, ref)
+}
+
+// VcsSymbolicRef returns the symbolic ref name for HEAD (branch name).
+func (vc *VCSContext) VcsSymbolicRef(ctx context.Context) (string, error) {
+	return vc.VCS.SymbolicRef(ctx)
+}
+
+// VcsGetRemoteURLs returns all remote fetch URLs.
+func (vc *VCSContext) VcsGetRemoteURLs(ctx context.Context) (map[string]string, error) {
+	return vc.VCS.GetRemoteURLs(ctx)
+}
+
 // mapGitToJJ translates common git commands to jj equivalents.
 func (vc *VCSContext) mapGitToJJ(ctx context.Context, args ...string) *exec.Cmd {
 	if len(args) == 0 {

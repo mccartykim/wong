@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -1072,6 +1073,81 @@ func (g *GitVCS) ListTrackedFiles(ctx context.Context, path string) ([]string, e
 		return nil, nil
 	}
 	return strings.Split(output, "\n"), nil
+}
+
+// --- Phase 5: Remaining production call site abstractions ---
+
+// ShowFile reads file content from a specific ref.
+func (g *GitVCS) ShowFile(ctx context.Context, ref, path string) ([]byte, error) {
+	output, err := g.runGit(ctx, "show", fmt.Sprintf("%s:%s", ref, path))
+	if err != nil {
+		return nil, err
+	}
+	return []byte(output), nil
+}
+
+// GetVCSDir returns the per-worktree .git directory.
+func (g *GitVCS) GetVCSDir(ctx context.Context) (string, error) {
+	output, err := g.runGit(ctx, "rev-parse", "--git-dir")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(output), nil
+}
+
+// IsWorktreeRepo returns true if this is a git worktree (not the main repo).
+func (g *GitVCS) IsWorktreeRepo(ctx context.Context) (bool, error) {
+	gitDir, err := g.GetVCSDir(ctx)
+	if err != nil {
+		return false, err
+	}
+	commonDir, err := g.GetCommonDir(ctx)
+	if err != nil {
+		return false, err
+	}
+	// Normalize paths for comparison
+	gitDirAbs, _ := filepath.Abs(gitDir)
+	commonDirAbs, _ := filepath.Abs(commonDir)
+	return gitDirAbs != commonDirAbs, nil
+}
+
+// Checkout switches the working copy to a different ref.
+func (g *GitVCS) Checkout(ctx context.Context, ref string) error {
+	_, err := g.runGit(ctx, "checkout", ref)
+	return err
+}
+
+// SymbolicRef returns the symbolic ref name for HEAD, or empty if detached.
+func (g *GitVCS) SymbolicRef(ctx context.Context) (string, error) {
+	output, err := g.runGit(ctx, "symbolic-ref", "--short", "HEAD")
+	if err != nil {
+		// Detached HEAD: git symbolic-ref exits 1
+		if _, ok := err.(*CommandError); ok {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(output), nil
+}
+
+// GetRemoteURLs returns all remote fetch URLs.
+func (g *GitVCS) GetRemoteURLs(ctx context.Context) (map[string]string, error) {
+	output, err := g.runGit(ctx, "remote", "-v")
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]string)
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if line == "" {
+			continue
+		}
+		// Format: origin\thttps://... (fetch)
+		parts := strings.Fields(line)
+		if len(parts) >= 2 && (len(parts) < 3 || parts[2] == "(fetch)") {
+			result[parts[0]] = parts[1]
+		}
+	}
+	return result, nil
 }
 
 // Ensure GitVCS implements VCS.

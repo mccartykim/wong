@@ -1137,6 +1137,85 @@ func (j *JujutsuVCS) ListTrackedFiles(ctx context.Context, path string) ([]strin
 	return strings.Split(output, "\n"), nil
 }
 
+// --- Phase 5: Remaining production call site abstractions ---
+
+// ShowFile reads file content from a specific revision.
+func (j *JujutsuVCS) ShowFile(ctx context.Context, ref, path string) ([]byte, error) {
+	output, err := j.runJJ(ctx, "file", "show", "-r", ref, path)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(output), nil
+}
+
+// GetVCSDir returns the .jj directory path.
+func (j *JujutsuVCS) GetVCSDir(ctx context.Context) (string, error) {
+	return filepath.Join(j.repoRoot, ".jj"), nil
+}
+
+// IsWorktreeRepo returns true if this is a non-default jj workspace.
+func (j *JujutsuVCS) IsWorktreeRepo(ctx context.Context) (bool, error) {
+	output, err := j.runJJ(ctx, "workspace", "list")
+	if err != nil {
+		return false, err
+	}
+	// Default workspace is named "default". If we're in a different workspace,
+	// we're in a "worktree" equivalent.
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "(current)") {
+			return !strings.HasPrefix(strings.TrimSpace(line), "default"), nil
+		}
+	}
+	return false, nil
+}
+
+// Checkout switches the working copy to a different ref.
+func (j *JujutsuVCS) Checkout(ctx context.Context, ref string) error {
+	_, err := j.runJJ(ctx, "edit", ref)
+	return err
+}
+
+// SymbolicRef returns the current bookmark name, or empty if none.
+func (j *JujutsuVCS) SymbolicRef(ctx context.Context) (string, error) {
+	// jj doesn't have HEAD in the git sense. Return the current bookmark if any.
+	output, err := j.runJJ(ctx, "log", "-r", "@", "--no-graph",
+		"-T", `separate(" ", bookmarks)`)
+	if err != nil {
+		return "", nil
+	}
+	result := strings.TrimSpace(output)
+	if result == "" {
+		return "", nil
+	}
+	// May have multiple bookmarks; return first
+	parts := strings.Fields(result)
+	if len(parts) > 0 {
+		return parts[0], nil
+	}
+	return "", nil
+}
+
+// GetRemoteURLs returns all remote URLs.
+func (j *JujutsuVCS) GetRemoteURLs(ctx context.Context) (map[string]string, error) {
+	output, err := j.runJJ(ctx, "git", "remote", "list")
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]string)
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if line == "" {
+			continue
+		}
+		// Format: origin https://...
+		parts := strings.Fields(line)
+		if len(parts) >= 2 {
+			result[parts[0]] = parts[1]
+		}
+	}
+	return result, nil
+}
+
 // Ensure JujutsuVCS implements VCS.
 var _ VCS = (*JujutsuVCS)(nil)
 

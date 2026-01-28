@@ -374,6 +374,37 @@ type VCS interface {
 	// ListTrackedFiles returns tracked files matching a path prefix.
 	// For git: git ls-files path. For jj: jj file list path.
 	ListTrackedFiles(ctx context.Context, path string) ([]string, error)
+
+	// --- Phase 5: Remaining production call site abstractions ---
+
+	// ShowFile reads file content from a specific ref/revision.
+	// For git: git show ref:path. For jj: jj file show -r ref path.
+	ShowFile(ctx context.Context, ref, path string) ([]byte, error)
+
+	// GetVCSDir returns the per-worktree VCS directory.
+	// For git: git rev-parse --git-dir (.git or .git/worktrees/<name>).
+	// For jj: the .jj directory path.
+	GetVCSDir(ctx context.Context) (string, error)
+
+	// IsWorktreeRepo returns true if the current directory is a worktree/workspace
+	// rather than the main repository.
+	// For git: checks if --git-dir differs from --git-common-dir.
+	// For jj: checks if the workspace is non-default.
+	IsWorktreeRepo(ctx context.Context) (bool, error)
+
+	// Checkout switches the working copy to a different ref.
+	// For git: git checkout ref. For jj: jj edit ref.
+	Checkout(ctx context.Context, ref string) error
+
+	// SymbolicRef returns the symbolic ref name (e.g., branch name) for HEAD.
+	// For git: git symbolic-ref --short HEAD. For jj: current bookmark name.
+	// Returns empty string and no error if HEAD is detached.
+	SymbolicRef(ctx context.Context) (string, error)
+
+	// GetRemoteURLs returns all remote URLs (for fork detection etc.).
+	// For git: git remote -v. For jj: jj git remote list.
+	// Returns a map of remote name → fetch URL.
+	GetRemoteURLs(ctx context.Context) (map[string]string, error)
 }
 
 // CommitOptions provides additional options for commits.

@@ -920,3 +920,153 @@ func vcsDeleteBranch(ctx context.Context, name string) error {
 	}
 	return vc.VcsDeleteBranch(ctx, name)
 }
+
+// --- Phase 5: Remaining production bridge functions ---
+
+// vcsShowFile reads file content from a specific VCS ref.
+// Replacement for: exec.Command("git", "show", ref+":"+path)
+func vcsShowFile(ctx context.Context, ref, path string) ([]byte, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return nil, fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsShowFile(ctx, ref, path)
+}
+
+// vcsGetVCSDir returns the per-worktree VCS directory.
+// Replacement for: git.GetGitDir() or exec.Command("git", "rev-parse", "--git-dir")
+func vcsGetVCSDir(ctx context.Context) (string, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return "", fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsGetVCSDir(ctx)
+}
+
+// vcsIsWorktreeRepo returns true if this is a worktree/non-default workspace.
+// Replacement for: git.IsWorktree()
+func vcsIsWorktreeRepo(ctx context.Context) bool {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return false
+	}
+	isWorktree, err := vc.VcsIsWorktreeRepo(ctx)
+	if err != nil {
+		return false
+	}
+	return isWorktree
+}
+
+// vcsGetHooksDir returns the VCS hooks directory.
+// Replacement for: git.GetGitHooksDir()
+// Uses custom hooks path if configured, otherwise defaults to common-dir/hooks.
+func vcsGetHooksDir(ctx context.Context) (string, error) {
+	// Check for custom hooks path first
+	hooksPath, err := vcsGetHooksPath(ctx)
+	if err == nil && hooksPath != "" {
+		return hooksPath, nil
+	}
+
+	// Default: common VCS dir + /hooks
+	commonDir, err := vcsGetCommonDir(ctx)
+	if err != nil {
+		return "", fmt.Errorf("getting VCS common dir: %w", err)
+	}
+	return filepath.Join(commonDir, "hooks"), nil
+}
+
+// vcsGetCurrentCommit returns the current HEAD commit hash.
+// Replacement for: exec.Command("git", "rev-parse", "HEAD")
+func vcsGetCurrentCommit(ctx context.Context) (string, error) {
+	return vcsResolveRef(ctx, "HEAD")
+}
+
+// vcsGetSymbolicRef returns the current branch name, or empty if detached.
+// Replacement for: exec.Command("git", "symbolic-ref", "--short", "HEAD")
+func vcsGetSymbolicRef(ctx context.Context) (string, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return "", fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsSymbolicRef(ctx)
+}
+
+// vcsGetRepoRootString returns the repo root as a string.
+// Replacement for: git.GetRepoRoot() or exec.Command("git", "rev-parse", "--show-toplevel")
+func vcsGetRepoRootString() string {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return ""
+	}
+	return vc.VCS.RepoRoot()
+}
+
+// vcsCheckout switches the working copy to a different ref.
+// Replacement for: exec.Command("git", "checkout", ref)
+func vcsCheckout(ctx context.Context, ref string) error {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsCheckout(ctx, ref)
+}
+
+// vcsHasUncommittedChangesSimple checks for any uncommitted changes.
+// Replacement for: exec.Command("git", "status", "--porcelain") with output check.
+func vcsHasUncommittedChangesSimple(ctx context.Context) (bool, error) {
+	entries, err := vcsStatusPorcelain(ctx)
+	if err != nil {
+		return false, err
+	}
+	return len(entries) > 0, nil
+}
+
+// vcsGetRemoteURLs returns all remote fetch URLs.
+// Replacement for: exec.Command("git", "remote", "-v")
+func vcsGetRemoteURLs(ctx context.Context) (map[string]string, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return nil, fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsGetRemoteURLs(ctx)
+}
+
+// vcsGetRemoteURLForPath returns the URL of a remote for a specific repo path.
+// Replacement for: exec.Command("git", "-C", path, "remote", "get-url", remote)
+func vcsGetRemoteURLForPath(ctx context.Context, repoPath, remote string) (string, error) {
+	vc, err := beads.GetVCSContextForPath(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("VCS context for %s: %w", repoPath, err)
+	}
+	return vc.VCS.GetRemoteURL(ctx, remote)
+}
+
+// vcsGetConfigForPath reads VCS config for a specific repo path.
+// Replacement for: exec.Command("git", "-C", path, "config", "--get", key)
+func vcsGetConfigForPath(ctx context.Context, repoPath, key string) (string, error) {
+	vc, err := beads.GetVCSContextForPath(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("VCS context for %s: %w", repoPath, err)
+	}
+	return vc.VCS.GetConfig(ctx, key)
+}
+
+// vcsGetRemoteURLsForPath returns all remote fetch URLs for a specific path.
+// Replacement for: exec.Command("git", "-C", path, "remote", "-v")
+func vcsGetRemoteURLsForPath(ctx context.Context, repoPath string) (map[string]string, error) {
+	vc, err := beads.GetVCSContextForPath(repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("VCS context for %s: %w", repoPath, err)
+	}
+	return vc.VCS.GetRemoteURLs(ctx)
+}
+
+// vcsGetVCSDirForPath returns the per-worktree VCS dir for a specific path.
+// Replacement for: exec.Command("git", "-C", path, "rev-parse", "--git-dir")
+func vcsGetVCSDirForPath(ctx context.Context, repoPath string) (string, error) {
+	vc, err := beads.GetVCSContextForPath(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("VCS context for %s: %w", repoPath, err)
+	}
+	return vc.VCS.GetVCSDir(ctx)
+}

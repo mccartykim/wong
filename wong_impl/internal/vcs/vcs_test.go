@@ -2098,3 +2098,207 @@ func TestGitVCS_ListTrackedFiles(t *testing.T) {
 		t.Errorf("expected at least 2 tracked files, got %d", len(files))
 	}
 }
+
+// --- Phase 5 Tests ---
+
+func TestGitVCS_ShowFile(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Create and commit a file
+	h.WriteFile(repoPath, "hello.txt", "hello world")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "initial")
+
+	// Read file from HEAD
+	content, err := gitVCS.ShowFile(ctx, "HEAD", "hello.txt")
+	if err != nil {
+		t.Fatalf("ShowFile: %v", err)
+	}
+	if string(content) != "hello world" {
+		t.Errorf("expected 'hello world', got %q", string(content))
+	}
+
+	// Update file and commit again
+	h.WriteFile(repoPath, "hello.txt", "updated content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "update")
+
+	// Read from HEAD should give new content
+	content, err = gitVCS.ShowFile(ctx, "HEAD", "hello.txt")
+	if err != nil {
+		t.Fatalf("ShowFile after update: %v", err)
+	}
+	if string(content) != "updated content" {
+		t.Errorf("expected 'updated content', got %q", string(content))
+	}
+
+	// Read from HEAD~1 should give old content
+	content, err = gitVCS.ShowFile(ctx, "HEAD~1", "hello.txt")
+	if err != nil {
+		t.Fatalf("ShowFile HEAD~1: %v", err)
+	}
+	if string(content) != "hello world" {
+		t.Errorf("expected 'hello world' from HEAD~1, got %q", string(content))
+	}
+}
+
+func TestGitVCS_GetVCSDir(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	vcsDir, err := gitVCS.GetVCSDir(ctx)
+	if err != nil {
+		t.Fatalf("GetVCSDir: %v", err)
+	}
+
+	// For a non-worktree repo, should end with .git
+	if !strings.HasSuffix(vcsDir, ".git") {
+		t.Errorf("expected VCS dir to end with .git, got %q", vcsDir)
+	}
+}
+
+func TestGitVCS_IsWorktreeRepo(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	// Need a commit first
+	h.WriteFile(repoPath, "init.txt", "init")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "trunk")
+	h.runCmd(repoPath, "git", "commit", "-m", "initial")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Main repo should not be a worktree
+	isWorktree, err := gitVCS.IsWorktreeRepo(ctx)
+	if err != nil {
+		t.Fatalf("IsWorktreeRepo: %v", err)
+	}
+	if isWorktree {
+		t.Errorf("expected main repo to not be a worktree")
+	}
+}
+
+func TestGitVCS_Checkout(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	// Create initial commit
+	h.WriteFile(repoPath, "test.txt", "v1")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "trunk")
+	h.runCmd(repoPath, "git", "commit", "-m", "v1")
+
+	// Create a branch
+	h.runCmd(repoPath, "git", "checkout", "-b", "feature")
+	h.WriteFile(repoPath, "test.txt", "v2")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "v2")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Checkout trunk
+	if err := gitVCS.Checkout(ctx, "trunk"); err != nil {
+		t.Fatalf("Checkout trunk: %v", err)
+	}
+
+	// Verify we're on trunk
+	branch, err := gitVCS.CurrentBranch(ctx)
+	if err != nil {
+		t.Fatalf("CurrentBranch: %v", err)
+	}
+	if branch != "trunk" {
+		t.Errorf("expected 'trunk', got %q", branch)
+	}
+}
+
+func TestGitVCS_SymbolicRef(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	// Create initial commit on a named branch
+	h.WriteFile(repoPath, "test.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "trunk")
+	h.runCmd(repoPath, "git", "commit", "-m", "initial")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Should return branch name
+	ref, err := gitVCS.SymbolicRef(ctx)
+	if err != nil {
+		t.Fatalf("SymbolicRef: %v", err)
+	}
+	if ref != "trunk" {
+		t.Errorf("expected 'trunk', got %q", ref)
+	}
+
+	// Detach HEAD
+	h.runCmd(repoPath, "git", "checkout", "--detach")
+
+	// Should return empty for detached HEAD
+	ref, err = gitVCS.SymbolicRef(ctx)
+	if err != nil {
+		t.Fatalf("SymbolicRef detached: %v", err)
+	}
+	if ref != "" {
+		t.Errorf("expected empty for detached HEAD, got %q", ref)
+	}
+}
+
+func TestGitVCS_GetRemoteURLs(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// No remotes initially
+	urls, err := gitVCS.GetRemoteURLs(ctx)
+	if err != nil {
+		// Some git versions return error when no remotes
+		return
+	}
+	if len(urls) != 0 {
+		t.Errorf("expected no remotes, got %d", len(urls))
+	}
+
+	// Add a remote
+	h.runCmd(repoPath, "git", "remote", "add", "origin", "https://github.com/test/repo.git")
+
+	urls, err = gitVCS.GetRemoteURLs(ctx)
+	if err != nil {
+		t.Fatalf("GetRemoteURLs: %v", err)
+	}
+	if url, ok := urls["origin"]; !ok || url != "https://github.com/test/repo.git" {
+		t.Errorf("expected origin URL, got %v", urls)
+	}
+}
