@@ -3470,3 +3470,479 @@ func TestGitVCS_RevListCount_WorkflowChain(t *testing.T) {
 		t.Errorf("expected 2 commits between c1 and c3, got %d", count)
 	}
 }
+
+// --- wong-bpg.11: Edge case tests ---
+
+func TestGitVCS_EmptyRepo_NoCommits(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Status on empty repo should work
+	entries, err := gitVCS.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status on empty repo: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected 0 entries on empty repo, got %d", len(entries))
+	}
+
+	// CurrentBranch on empty repo (no commits yet) may fail or return empty
+	_, err = gitVCS.CurrentBranch(ctx)
+	// We just verify it doesn't panic - error is acceptable
+	_ = err
+
+	// ResolveRef HEAD should fail on empty repo
+	_, err = gitVCS.ResolveRef(ctx, "HEAD")
+	if err == nil {
+		t.Error("expected error resolving HEAD on empty repo")
+	}
+}
+
+func TestGitVCS_UnicodeFilenames(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	// Create initial commit
+	h.WriteFile(repoPath, "init.txt", "init")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "main")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Create file with unicode name
+	h.WriteFile(repoPath, "café.txt", "unicode content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "add unicode file")
+
+	tracked, err := gitVCS.IsFileTracked(ctx, "café.txt")
+	if err != nil {
+		t.Fatalf("IsFileTracked unicode: %v", err)
+	}
+	if !tracked {
+		t.Error("expected unicode filename to be tracked")
+	}
+
+	files, err := gitVCS.ListTrackedFiles(ctx, ".")
+	if err != nil {
+		t.Fatalf("ListTrackedFiles: %v", err)
+	}
+	found := false
+	for _, f := range files {
+		if strings.Contains(f, "café") || strings.Contains(f, "caf") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected unicode file in tracked list, got %v", files)
+	}
+}
+
+func TestGitVCS_NestedDirectories(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "init.txt", "init")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "main")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Create deeply nested file
+	deepPath := filepath.Join("a", "b", "c", "d", "deep.txt")
+	if err := os.MkdirAll(filepath.Join(repoPath, "a", "b", "c", "d"), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	h.WriteFile(repoPath, deepPath, "deep content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "add deep file")
+
+	tracked, err := gitVCS.IsFileTracked(ctx, deepPath)
+	if err != nil {
+		t.Fatalf("IsFileTracked nested: %v", err)
+	}
+	if !tracked {
+		t.Error("expected deeply nested file to be tracked")
+	}
+
+	content, err := gitVCS.ShowFile(ctx, "HEAD", deepPath)
+	if err != nil {
+		t.Fatalf("ShowFile nested: %v", err)
+	}
+	if string(content) != "deep content" {
+		t.Errorf("expected 'deep content', got %q", string(content))
+	}
+}
+
+func TestGitVCS_LargeFile(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "init.txt", "init")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "main")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Create a 1MB file
+	largeContent := strings.Repeat("x", 1024*1024)
+	h.WriteFile(repoPath, "large.txt", largeContent)
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "add large file")
+
+	content, err := gitVCS.ShowFile(ctx, "HEAD", "large.txt")
+	if err != nil {
+		t.Fatalf("ShowFile large: %v", err)
+	}
+	if len(content) != 1024*1024 {
+		t.Errorf("expected 1MB content, got %d bytes", len(content))
+	}
+}
+
+func TestGitVCS_BinaryFile(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "init.txt", "init")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "main")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Create binary file with null bytes
+	binaryContent := []byte{0x00, 0x01, 0x02, 0xFF, 0xFE, 0x00, 0x89, 0x50, 0x4E, 0x47}
+	if err := os.WriteFile(filepath.Join(repoPath, "binary.dat"), binaryContent, 0644); err != nil {
+		t.Fatalf("WriteFile binary: %v", err)
+	}
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "add binary file")
+
+	tracked, err := gitVCS.IsFileTracked(ctx, "binary.dat")
+	if err != nil {
+		t.Fatalf("IsFileTracked binary: %v", err)
+	}
+	if !tracked {
+		t.Error("expected binary file to be tracked")
+	}
+
+	// ShowFile should return binary content
+	content, err := gitVCS.ShowFile(ctx, "HEAD", "binary.dat")
+	if err != nil {
+		t.Fatalf("ShowFile binary: %v", err)
+	}
+	if len(content) != len(binaryContent) {
+		t.Errorf("expected %d bytes, got %d", len(binaryContent), len(content))
+	}
+}
+
+func TestGitVCS_SpacesInFilename(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "init.txt", "init")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "main")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Create file with spaces in name
+	h.WriteFile(repoPath, "my file.txt", "spaced content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "add spaced file")
+
+	tracked, err := gitVCS.IsFileTracked(ctx, "my file.txt")
+	if err != nil {
+		t.Fatalf("IsFileTracked spaced: %v", err)
+	}
+	if !tracked {
+		t.Error("expected file with spaces to be tracked")
+	}
+
+	content, err := gitVCS.ShowFile(ctx, "HEAD", "my file.txt")
+	if err != nil {
+		t.Fatalf("ShowFile spaced: %v", err)
+	}
+	if string(content) != "spaced content" {
+		t.Errorf("expected 'spaced content', got %q", string(content))
+	}
+}
+
+func TestGitVCS_EmptyCommitMessage(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "init.txt", "init")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "main")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Stage a file and try empty commit message
+	h.WriteFile(repoPath, "new.txt", "new")
+	if err := gitVCS.Stage(ctx, "new.txt"); err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+
+	// Empty commit message - git should reject with --allow-empty-message not set
+	err = gitVCS.Commit(ctx, "", nil)
+	// Git behavior: empty message with -m "" actually works (creates commit with empty message)
+	// We just verify it doesn't panic
+	_ = err
+}
+
+func TestGitVCS_MultipleRemotes(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "init.txt", "init")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "main")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	// Add multiple remotes
+	h.runCmd(repoPath, "git", "remote", "add", "origin", "https://github.com/user/repo.git")
+	h.runCmd(repoPath, "git", "remote", "add", "upstream", "https://github.com/upstream/repo.git")
+	h.runCmd(repoPath, "git", "remote", "add", "fork", "git@github.com:fork/repo.git")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	urls, err := gitVCS.GetRemoteURLs(ctx)
+	if err != nil {
+		t.Fatalf("GetRemoteURLs: %v", err)
+	}
+
+	if len(urls) < 3 {
+		t.Errorf("expected at least 3 remotes, got %d: %v", len(urls), urls)
+	}
+	if urls["origin"] != "https://github.com/user/repo.git" {
+		t.Errorf("wrong origin URL: %q", urls["origin"])
+	}
+	if urls["upstream"] != "https://github.com/upstream/repo.git" {
+		t.Errorf("wrong upstream URL: %q", urls["upstream"])
+	}
+	if urls["fork"] != "git@github.com:fork/repo.git" {
+		t.Errorf("wrong fork URL: %q", urls["fork"])
+	}
+
+	hasRemote, err := gitVCS.HasRemote(ctx)
+	if err != nil {
+		t.Fatalf("HasRemote: %v", err)
+	}
+	if !hasRemote {
+		t.Error("expected HasRemote true with 3 remotes")
+	}
+}
+
+func TestGitVCS_ContextTimeout(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+
+	h.WriteFile(repoPath, "init.txt", "init")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "main")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Already-cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = gitVCS.Status(ctx)
+	if err == nil {
+		t.Error("expected error with cancelled context")
+	}
+}
+
+func TestGitVCS_Symlink(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "target.txt", "target content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "main")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	// Create a symlink
+	if err := os.Symlink("target.txt", filepath.Join(repoPath, "link.txt")); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "add symlink")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	tracked, err := gitVCS.IsFileTracked(ctx, "link.txt")
+	if err != nil {
+		t.Fatalf("IsFileTracked symlink: %v", err)
+	}
+	if !tracked {
+		t.Error("expected symlink to be tracked")
+	}
+}
+
+func TestGitVCS_GitignoreInteraction(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "init.txt", "init")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "main")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	// Create .gitignore that ignores *.log files
+	h.WriteFile(repoPath, ".gitignore", "*.log\n")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "add gitignore")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Create ignored file
+	h.WriteFile(repoPath, "debug.log", "log content")
+
+	// Status should not show .log file as untracked
+	entries, err := gitVCS.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Path, ".log") {
+			t.Errorf("expected .log file to be ignored, but found in status: %s", e.Path)
+		}
+	}
+
+	// CheckIgnore should confirm it's ignored
+	ignored, err := gitVCS.CheckIgnore(ctx, "debug.log")
+	if err != nil {
+		t.Fatalf("CheckIgnore: %v", err)
+	}
+	if !ignored {
+		t.Error("expected debug.log to be ignored")
+	}
+}
+
+func TestGitVCS_StatusMultipleFiles(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "init.txt", "init")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "main")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Create multiple changes: new file, modified file, deleted file
+	h.WriteFile(repoPath, "new.txt", "new content")
+	h.WriteFile(repoPath, "init.txt", "modified")
+	h.WriteFile(repoPath, "staged.txt", "staged")
+	h.runCmd(repoPath, "git", "add", "staged.txt")
+
+	entries, err := gitVCS.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+
+	// Should have at least 3 entries: new.txt (untracked), init.txt (modified), staged.txt (added)
+	if len(entries) < 3 {
+		t.Errorf("expected at least 3 status entries, got %d", len(entries))
+		for _, e := range entries {
+			t.Logf("  %s staged=%v %s", e.Status, e.Staged, e.Path)
+		}
+	}
+}
+
+func TestGitVCS_DiffHasChanges_StagedVsUnstaged(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("test")
+	ctx := context.Background()
+
+	h.WriteFile(repoPath, "file.txt", "original")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "checkout", "-b", "main")
+	h.runCmd(repoPath, "git", "commit", "-m", "init")
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Modify and stage
+	h.WriteFile(repoPath, "file.txt", "staged change")
+	h.runCmd(repoPath, "git", "add", "file.txt")
+
+	// DiffHasChanges against HEAD should detect staged changes
+	hasChanges, err := gitVCS.DiffHasChanges(ctx, "HEAD", "file.txt")
+	if err != nil {
+		t.Fatalf("DiffHasChanges: %v", err)
+	}
+	if !hasChanges {
+		t.Error("expected changes after staging modification")
+	}
+
+	// Modify again (unstaged on top of staged)
+	h.WriteFile(repoPath, "file.txt", "unstaged on top")
+
+	hasChanges, err = gitVCS.DiffHasChanges(ctx, "HEAD", "file.txt")
+	if err != nil {
+		t.Fatalf("DiffHasChanges unstaged: %v", err)
+	}
+	if !hasChanges {
+		t.Error("expected changes with unstaged modifications")
+	}
+}
