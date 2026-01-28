@@ -203,6 +203,46 @@ type VCS interface {
 	// For git: git checkout. For jj: jj edit.
 	Edit(ctx context.Context, id string) error
 
+	// --- Ref Resolution & Branch Queries ---
+
+	// BranchExists returns true if the named branch/bookmark exists.
+	BranchExists(ctx context.Context, name string) (bool, error)
+
+	// ResolveRef resolves a symbolic reference to a commit/change ID.
+	ResolveRef(ctx context.Context, ref string) (string, error)
+
+	// IsAncestor returns true if ancestor is an ancestor of descendant.
+	IsAncestor(ctx context.Context, ancestor, descendant string) (bool, error)
+
+	// --- Merge Operations ---
+
+	// Merge merges the named branch/change into the current working copy.
+	Merge(ctx context.Context, branch, message string) error
+
+	// IsMerging returns true if a merge is in progress.
+	IsMerging(ctx context.Context) (bool, error)
+
+	// --- Configuration ---
+
+	// GetConfig reads a VCS config value.
+	GetConfig(ctx context.Context, key string) (string, error)
+
+	// SetConfig writes a VCS config value.
+	SetConfig(ctx context.Context, key, value string) error
+
+	// --- Remote Operations ---
+
+	// GetRemoteURL returns the URL for a named remote.
+	GetRemoteURL(ctx context.Context, remote string) (string, error)
+
+	// --- File-Level Operations ---
+
+	// CheckoutFile checks out a specific file from a given revision.
+	CheckoutFile(ctx context.Context, ref, path string) error
+
+	// Clean removes untracked files from the working copy.
+	Clean(ctx context.Context) error
+
 	// --- Stack Navigation ---
 
 	// Next moves to the next (child) change in the stack.

@@ -177,6 +177,58 @@ func (vc *VCSContext) VcsMarkResolved(ctx context.Context, path string) error {
 	return vc.VCS.MarkResolved(ctx, path)
 }
 
+// --- Phase 1: Ref resolution, merge, config ---
+
+// VcsBranchExists returns true if the named branch/bookmark exists.
+func (vc *VCSContext) VcsBranchExists(ctx context.Context, name string) (bool, error) {
+	return vc.VCS.BranchExists(ctx, name)
+}
+
+// VcsResolveRef resolves a symbolic reference to a commit/change ID.
+func (vc *VCSContext) VcsResolveRef(ctx context.Context, ref string) (string, error) {
+	return vc.VCS.ResolveRef(ctx, ref)
+}
+
+// VcsIsAncestor returns true if ancestor is an ancestor of descendant.
+func (vc *VCSContext) VcsIsAncestor(ctx context.Context, ancestor, descendant string) (bool, error) {
+	return vc.VCS.IsAncestor(ctx, ancestor, descendant)
+}
+
+// VcsMerge merges the named branch/change into the current working copy.
+func (vc *VCSContext) VcsMerge(ctx context.Context, branch, message string) error {
+	return vc.VCS.Merge(ctx, branch, message)
+}
+
+// VcsIsMerging returns true if a merge is in progress.
+func (vc *VCSContext) VcsIsMerging(ctx context.Context) (bool, error) {
+	return vc.VCS.IsMerging(ctx)
+}
+
+// VcsGetConfig reads a VCS config value.
+func (vc *VCSContext) VcsGetConfig(ctx context.Context, key string) (string, error) {
+	return vc.VCS.GetConfig(ctx, key)
+}
+
+// VcsSetConfig writes a VCS config value.
+func (vc *VCSContext) VcsSetConfig(ctx context.Context, key, value string) error {
+	return vc.VCS.SetConfig(ctx, key, value)
+}
+
+// VcsGetRemoteURL returns the URL for a named remote.
+func (vc *VCSContext) VcsGetRemoteURL(ctx context.Context, remote string) (string, error) {
+	return vc.VCS.GetRemoteURL(ctx, remote)
+}
+
+// VcsCheckoutFile checks out a specific file from a given revision.
+func (vc *VCSContext) VcsCheckoutFile(ctx context.Context, ref, path string) error {
+	return vc.VCS.CheckoutFile(ctx, ref, path)
+}
+
+// VcsClean removes untracked files from the working copy.
+func (vc *VCSContext) VcsClean(ctx context.Context) error {
+	return vc.VCS.Clean(ctx)
+}
+
 // --- Sync helpers specific to beads ---
 
 // SyncBeadsFiles stages, commits, and optionally pushes .beads/ files.

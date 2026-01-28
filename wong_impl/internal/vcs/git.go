@@ -640,6 +640,95 @@ func (g *GitVCS) Edit(ctx context.Context, id string) error {
 	return err
 }
 
+// --- Ref Resolution & Branch Queries ---
+
+// BranchExists returns true if the named branch exists.
+func (g *GitVCS) BranchExists(ctx context.Context, name string) (bool, error) {
+	_, err := g.runGit(ctx, "show-ref", "--verify", "--quiet", "refs/heads/"+name)
+	if err != nil {
+		if _, ok := err.(*CommandError); ok {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// ResolveRef resolves a symbolic reference to a commit hash.
+func (g *GitVCS) ResolveRef(ctx context.Context, ref string) (string, error) {
+	return g.runGit(ctx, "rev-parse", ref)
+}
+
+// IsAncestor returns true if ancestor is an ancestor of descendant.
+func (g *GitVCS) IsAncestor(ctx context.Context, ancestor, descendant string) (bool, error) {
+	_, err := g.runGit(ctx, "merge-base", "--is-ancestor", ancestor, descendant)
+	if err != nil {
+		if _, ok := err.(*CommandError); ok {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// --- Merge Operations ---
+
+// Merge merges the named branch into the current branch.
+func (g *GitVCS) Merge(ctx context.Context, branch, message string) error {
+	args := []string{"merge", branch}
+	if message != "" {
+		args = append(args, "-m", message)
+	}
+	_, err := g.runGit(ctx, args...)
+	return err
+}
+
+// IsMerging returns true if a merge is in progress.
+func (g *GitVCS) IsMerging(ctx context.Context) (bool, error) {
+	_, err := g.runGit(ctx, "rev-parse", "-q", "--verify", "MERGE_HEAD")
+	if err != nil {
+		if _, ok := err.(*CommandError); ok {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// --- Configuration ---
+
+// GetConfig reads a git config value.
+func (g *GitVCS) GetConfig(ctx context.Context, key string) (string, error) {
+	return g.runGit(ctx, "config", "--get", key)
+}
+
+// SetConfig writes a git config value.
+func (g *GitVCS) SetConfig(ctx context.Context, key, value string) error {
+	_, err := g.runGit(ctx, "config", key, value)
+	return err
+}
+
+// --- Remote Operations ---
+
+// GetRemoteURL returns the URL for a named remote.
+func (g *GitVCS) GetRemoteURL(ctx context.Context, remote string) (string, error) {
+	return g.runGit(ctx, "remote", "get-url", remote)
+}
+
+// --- File-Level Operations ---
+
+// CheckoutFile checks out a specific file from a given revision.
+func (g *GitVCS) CheckoutFile(ctx context.Context, ref, path string) error {
+	_, err := g.runGit(ctx, "checkout", ref, "--", path)
+	return err
+}
+
+// Clean removes untracked files from the working copy.
+func (g *GitVCS) Clean(ctx context.Context) error {
+	_, err := g.runGit(ctx, "clean", "-f")
+	return err
+}
+
 // --- Stack Navigation ---
 
 // Next moves to the next (child) commit in the stack.

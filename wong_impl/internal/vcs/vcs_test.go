@@ -844,6 +844,284 @@ func BenchmarkJJStatus(b *testing.B) {
 	}
 }
 
+// --- Phase 1: Ref Resolution, Merge, Config Tests ---
+
+func TestGitVCS_BranchExists(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("git-branch-exists")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS failed: %v", err)
+	}
+
+	// Create initial commit so branches can exist
+	h.WriteFile(repoPath, "file.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "Initial")
+
+	// Current branch should exist
+	exists, err := gitVCS.BranchExists(ctx, "main")
+	if err != nil {
+		t.Fatalf("BranchExists failed: %v", err)
+	}
+	// main might not be default, check master too
+	if !exists {
+		exists, err = gitVCS.BranchExists(ctx, "master")
+		if err != nil {
+			t.Fatalf("BranchExists (master) failed: %v", err)
+		}
+	}
+	if !exists {
+		t.Error("expected current branch to exist")
+	}
+
+	// Non-existent branch
+	exists, err = gitVCS.BranchExists(ctx, "nonexistent-branch-xyz")
+	if err != nil {
+		t.Fatalf("BranchExists failed: %v", err)
+	}
+	if exists {
+		t.Error("expected nonexistent branch to not exist")
+	}
+}
+
+func TestGitVCS_ResolveRef(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("git-resolve-ref")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS failed: %v", err)
+	}
+
+	h.WriteFile(repoPath, "file.txt", "content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "Initial")
+
+	// Resolve HEAD
+	sha, err := gitVCS.ResolveRef(ctx, "HEAD")
+	if err != nil {
+		t.Fatalf("ResolveRef failed: %v", err)
+	}
+	if len(sha) < 7 {
+		t.Errorf("expected full SHA, got %q", sha)
+	}
+}
+
+func TestGitVCS_IsAncestor(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("git-is-ancestor")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS failed: %v", err)
+	}
+
+	h.WriteFile(repoPath, "file.txt", "v1")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "First")
+
+	first, _ := gitVCS.ResolveRef(ctx, "HEAD")
+
+	h.WriteFile(repoPath, "file.txt", "v2")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "Second")
+
+	second, _ := gitVCS.ResolveRef(ctx, "HEAD")
+
+	// First should be ancestor of second
+	isAnc, err := gitVCS.IsAncestor(ctx, first, second)
+	if err != nil {
+		t.Fatalf("IsAncestor failed: %v", err)
+	}
+	if !isAnc {
+		t.Error("expected first to be ancestor of second")
+	}
+
+	// Second should NOT be ancestor of first
+	isAnc, err = gitVCS.IsAncestor(ctx, second, first)
+	if err != nil {
+		t.Fatalf("IsAncestor failed: %v", err)
+	}
+	if isAnc {
+		t.Error("expected second to NOT be ancestor of first")
+	}
+}
+
+func TestGitVCS_MergeAndIsMerging(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("git-merge")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS failed: %v", err)
+	}
+
+	h.WriteFile(repoPath, "file.txt", "main content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "Initial on main")
+
+	// Get the default branch name
+	defaultBranch, _ := gitVCS.CurrentBranch(ctx)
+
+	// Create a branch with different content
+	h.runCmd(repoPath, "git", "checkout", "-b", "feature")
+	h.WriteFile(repoPath, "feature.txt", "feature content")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "Feature commit")
+
+	// Switch back and merge
+	h.runCmd(repoPath, "git", "checkout", defaultBranch)
+	err = gitVCS.Merge(ctx, "feature", "Merge feature")
+	if err != nil {
+		t.Fatalf("Merge failed: %v", err)
+	}
+
+	// Should not be merging after successful merge
+	merging, err := gitVCS.IsMerging(ctx)
+	if err != nil {
+		t.Fatalf("IsMerging failed: %v", err)
+	}
+	if merging {
+		t.Error("expected not to be merging after successful merge")
+	}
+}
+
+func TestGitVCS_Config(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("git-config")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS failed: %v", err)
+	}
+
+	// Set and get a config value
+	err = gitVCS.SetConfig(ctx, "beads.test-key", "test-value")
+	if err != nil {
+		t.Fatalf("SetConfig failed: %v", err)
+	}
+
+	val, err := gitVCS.GetConfig(ctx, "beads.test-key")
+	if err != nil {
+		t.Fatalf("GetConfig failed: %v", err)
+	}
+	if val != "test-value" {
+		t.Errorf("expected 'test-value', got %q", val)
+	}
+}
+
+func TestGitVCS_CheckoutFile(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("git-checkout-file")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS failed: %v", err)
+	}
+
+	// Commit a file
+	h.WriteFile(repoPath, "file.txt", "original")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "Original")
+
+	// Modify it
+	h.WriteFile(repoPath, "file.txt", "modified")
+
+	// Checkout from HEAD (restore original)
+	err = gitVCS.CheckoutFile(ctx, "HEAD", "file.txt")
+	if err != nil {
+		t.Fatalf("CheckoutFile failed: %v", err)
+	}
+
+	// Verify content is restored
+	content, _ := os.ReadFile(filepath.Join(repoPath, "file.txt"))
+	if string(content) != "original" {
+		t.Errorf("expected 'original', got %q", string(content))
+	}
+}
+
+func TestJujutsuVCS_BranchExistsAndResolveRef(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-branch-resolve")
+	ctx := context.Background()
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS failed: %v", err)
+	}
+
+	// Create content and a bookmark
+	h.WriteFile(repoPath, "file.txt", "content")
+	jjVCS.Commit(ctx, "Initial", nil)
+	jjVCS.CreateBranch(ctx, "test-bookmark")
+
+	// Bookmark should exist
+	exists, err := jjVCS.BranchExists(ctx, "test-bookmark")
+	if err != nil {
+		t.Fatalf("BranchExists failed: %v", err)
+	}
+	if !exists {
+		t.Error("expected test-bookmark to exist")
+	}
+
+	// Nonexistent should not
+	exists, _ = jjVCS.BranchExists(ctx, "nope-xyz")
+	if exists {
+		t.Error("expected nope-xyz to not exist")
+	}
+
+	// Resolve @
+	changeID, err := jjVCS.ResolveRef(ctx, "@")
+	if err != nil {
+		t.Fatalf("ResolveRef failed: %v", err)
+	}
+	if changeID == "" {
+		t.Error("expected non-empty change ID")
+	}
+}
+
+func TestJujutsuVCS_ConfigAndClean(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed, skipping")
+	}
+
+	h := NewTestHelper(t)
+	repoPath := h.CreateJJRepo("jj-config")
+	ctx := context.Background()
+
+	jjVCS, err := NewJujutsuVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewJujutsuVCS failed: %v", err)
+	}
+
+	// Clean should be a no-op for jj
+	err = jjVCS.Clean(ctx)
+	if err != nil {
+		t.Fatalf("Clean failed: %v", err)
+	}
+
+	// IsMerging should always be false for jj
+	merging, err := jjVCS.IsMerging(ctx)
+	if err != nil {
+		t.Fatalf("IsMerging failed: %v", err)
+	}
+	if merging {
+		t.Error("expected IsMerging=false for jj")
+	}
+}
+
 // --- Stack Navigation Tests ---
 
 func TestJujutsuVCS_NextPrev(t *testing.T) {

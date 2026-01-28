@@ -211,6 +211,176 @@ func vcsMarkResolved(ctx context.Context, path string) error {
 	return vc.VcsMarkResolved(ctx, path)
 }
 
+// --- Phase 1: Ref resolution, merge, config ---
+
+// vcsBranchExists returns true if the named branch/bookmark exists.
+func vcsBranchExists(ctx context.Context, name string) (bool, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return false, fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsBranchExists(ctx, name)
+}
+
+// vcsResolveRef resolves a symbolic reference to a commit/change ID.
+func vcsResolveRef(ctx context.Context, ref string) (string, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return "", fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsResolveRef(ctx, ref)
+}
+
+// vcsIsAncestor returns true if ancestor is an ancestor of descendant.
+func vcsIsAncestor(ctx context.Context, ancestor, descendant string) (bool, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return false, fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsIsAncestor(ctx, ancestor, descendant)
+}
+
+// vcsMerge merges the named branch/change into the current working copy.
+func vcsMerge(ctx context.Context, branch, message string) error {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsMerge(ctx, branch, message)
+}
+
+// vcsIsMerging returns true if a merge is in progress.
+func vcsIsMerging(ctx context.Context) (bool, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return false, fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsIsMerging(ctx)
+}
+
+// vcsGetConfig reads a VCS config value.
+func vcsGetConfig(ctx context.Context, key string) (string, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return "", fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsGetConfig(ctx, key)
+}
+
+// vcsSetConfig writes a VCS config value.
+func vcsSetConfig(ctx context.Context, key, value string) error {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsSetConfig(ctx, key, value)
+}
+
+// vcsGetRemoteURL returns the URL for a named remote.
+func vcsGetRemoteURL(ctx context.Context, remote string) (string, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return "", fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsGetRemoteURL(ctx, remote)
+}
+
+// vcsCheckoutFile checks out a specific file from a given revision.
+func vcsCheckoutFile(ctx context.Context, ref, path string) error {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsCheckoutFile(ctx, ref, path)
+}
+
+// vcsClean removes untracked files from the working copy.
+func vcsClean(ctx context.Context) error {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsClean(ctx)
+}
+
+// vcsBranchHasUpstream checks if the current branch has upstream tracking.
+func vcsBranchHasUpstream(ctx context.Context) (bool, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return false, fmt.Errorf("getting VCS context: %w", err)
+	}
+
+	branch, err := vc.VcsCurrentBranch(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	if vc.IsJujutsu() {
+		// jj bookmarks may track remotes - check if remote exists
+		hasRemote, err := vc.VcsHasRemote(ctx)
+		return hasRemote, err
+	}
+
+	// Git: check branch.{name}.remote config
+	_, err = vc.VcsGetConfig(ctx, "branch."+branch+".remote")
+	if err != nil {
+		return false, nil // No upstream configured
+	}
+	return true, nil
+}
+
+// vcsHasBeadsChanges checks if .beads/ files have uncommitted changes.
+func vcsHasBeadsChanges(ctx context.Context) (bool, error) {
+	return vcsBeadsDirStatus()
+}
+
+// vcsHasFileChanges checks if a specific file has uncommitted changes.
+func vcsHasFileChanges(ctx context.Context, path string) (bool, error) {
+	entry, err := vcsFileStatus(path)
+	if err != nil {
+		return false, err
+	}
+	return entry.Status != vcs.FileStatusUnmodified, nil
+}
+
+// vcsGetDefaultBranch returns the default branch for the given remote.
+func vcsGetDefaultBranch(ctx context.Context, remote string) (string, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return "", fmt.Errorf("getting VCS context: %w", err)
+	}
+
+	if vc.IsJujutsu() {
+		// jj: check for main bookmark, then master
+		if exists, _ := vc.VcsBranchExists(ctx, "main"); exists {
+			return "main", nil
+		}
+		if exists, _ := vc.VcsBranchExists(ctx, "master"); exists {
+			return "master", nil
+		}
+		return "main", nil
+	}
+
+	// Git: try symbolic-ref, then check main/master
+	ref, err := vc.VcsResolveRef(ctx, "refs/remotes/"+remote+"/HEAD")
+	if err == nil && ref != "" {
+		parts := strings.Split(ref, "/")
+		return parts[len(parts)-1], nil
+	}
+
+	// Fallback: check if main or master exists
+	mainRef := remote + "/main"
+	if _, err := vc.VcsResolveRef(ctx, mainRef); err == nil {
+		return "main", nil
+	}
+	masterRef := remote + "/master"
+	if _, err := vc.VcsResolveRef(ctx, masterRef); err == nil {
+		return "master", nil
+	}
+
+	return "main", nil // default guess
+}
+
 // vcsFullSync performs a complete sync: pull, commit beads, push.
 func vcsFullSync(ctx context.Context, message string) error {
 	// 1. Pull latest

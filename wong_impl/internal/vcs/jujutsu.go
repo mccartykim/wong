@@ -627,6 +627,117 @@ func (j *JujutsuVCS) Edit(ctx context.Context, id string) error {
 	return err
 }
 
+// --- Ref Resolution & Branch Queries ---
+
+// BranchExists returns true if the named bookmark exists.
+func (j *JujutsuVCS) BranchExists(ctx context.Context, name string) (bool, error) {
+	output, err := j.runJJ(ctx, "bookmark", "list", "--all")
+	if err != nil {
+		return false, err
+	}
+	for _, line := range strings.Split(output, "\n") {
+		// jj bookmark list format: "name: changeID description"
+		if strings.HasPrefix(line, name+":") || strings.HasPrefix(line, name+" ") {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ResolveRef resolves a revision expression to a change ID.
+func (j *JujutsuVCS) ResolveRef(ctx context.Context, ref string) (string, error) {
+	output, err := j.runJJ(ctx, "log", "--no-graph", "-r", ref,
+		"-T", `change_id ++ "\n"`, "--limit", "1")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(output), nil
+}
+
+// IsAncestor returns true if ancestor is an ancestor of descendant.
+func (j *JujutsuVCS) IsAncestor(ctx context.Context, ancestor, descendant string) (bool, error) {
+	// Use jj revset: ancestor is in ancestors(descendant)
+	output, err := j.runJJ(ctx, "log", "--no-graph", "-r",
+		ancestor+" & ancestors("+descendant+")",
+		"-T", `change_id`, "--limit", "1")
+	if err != nil {
+		// If the revset is empty, jj may still succeed with no output
+		return false, nil
+	}
+	return strings.TrimSpace(output) != "", nil
+}
+
+// --- Merge Operations ---
+
+// Merge merges the named change. For jj, this creates a merge commit.
+func (j *JujutsuVCS) Merge(ctx context.Context, branch, message string) error {
+	args := []string{"new", "@", branch}
+	if message != "" {
+		args = append(args, "-m", message)
+	}
+	_, err := j.runJJ(ctx, args...)
+	return err
+}
+
+// IsMerging returns true if a merge is in progress.
+// jj doesn't have a "merge in progress" state - merges are atomic.
+func (j *JujutsuVCS) IsMerging(ctx context.Context) (bool, error) {
+	return false, nil
+}
+
+// --- Configuration ---
+
+// GetConfig reads a jj config value.
+func (j *JujutsuVCS) GetConfig(ctx context.Context, key string) (string, error) {
+	return j.runJJ(ctx, "config", "get", key)
+}
+
+// SetConfig writes a jj config value (repo-level).
+func (j *JujutsuVCS) SetConfig(ctx context.Context, key, value string) error {
+	_, err := j.runJJ(ctx, "config", "set", "--repo", key, value)
+	return err
+}
+
+// --- Remote Operations ---
+
+// GetRemoteURL returns the URL for a named remote.
+func (j *JujutsuVCS) GetRemoteURL(ctx context.Context, remote string) (string, error) {
+	// jj stores remote config in .jj/repo/config - try via jj config
+	key := "git.remotes." + remote + ".url"
+	url, err := j.runJJ(ctx, "config", "get", key)
+	if err != nil {
+		// Fallback: if colocated, try git
+		if j.isColocated {
+			cmd := exec.CommandContext(ctx, "git", "remote", "get-url", remote)
+			cmd.Dir = j.repoRoot
+			out, gitErr := cmd.Output()
+			if gitErr == nil {
+				return strings.TrimSpace(string(out)), nil
+			}
+		}
+		return "", err
+	}
+	return url, nil
+}
+
+// --- File-Level Operations ---
+
+// CheckoutFile checks out a specific file from a given revision.
+func (j *JujutsuVCS) CheckoutFile(ctx context.Context, ref, path string) error {
+	// jj file show outputs file content; write it to the working copy
+	output, err := j.runJJ(ctx, "file", "show", "-r", ref, path)
+	if err != nil {
+		return err
+	}
+	fullPath := filepath.Join(j.repoRoot, path)
+	return os.WriteFile(fullPath, []byte(output), 0644)
+}
+
+// Clean is a no-op for jj - jj tracks all files automatically.
+func (j *JujutsuVCS) Clean(ctx context.Context) error {
+	return nil
+}
+
 // --- Stack Navigation ---
 
 // Next moves to the next (child) change in the stack.
