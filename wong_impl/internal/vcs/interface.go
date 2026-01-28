@@ -332,6 +332,48 @@ type VCS interface {
 	// UntrackFiles stops tracking files without deleting them.
 	// For git: git rm --cached. For jj: jj file untrack.
 	UntrackFiles(ctx context.Context, paths ...string) error
+
+	// --- Phase 4: Doctor/maintenance operations ---
+
+	// DiffHasChanges returns true if the file at path differs from the given ref.
+	// For git: git diff --quiet ref -- path. For jj: jj diff -r ref --stat path.
+	DiffHasChanges(ctx context.Context, ref, path string) (bool, error)
+
+	// RevListCount returns the number of commits between two refs.
+	// For git: git rev-list --count from..to. For jj: jj log from..to count.
+	RevListCount(ctx context.Context, from, to string) (int, error)
+
+	// MergeBase returns the common ancestor of two refs.
+	// For git: git merge-base ref1 ref2. For jj: jj log -r 'heads(::ref1 & ::ref2)'.
+	MergeBase(ctx context.Context, ref1, ref2 string) (string, error)
+
+	// GetUpstream returns the upstream tracking ref for the current branch.
+	// For git: git rev-parse --abbrev-ref @{u}. For jj: remote bookmark tracking.
+	GetUpstream(ctx context.Context) (string, error)
+
+	// CheckIgnore returns true if the path is ignored by VCS ignore rules.
+	// For git: git check-ignore. For jj: checks .gitignore (jj uses same format).
+	CheckIgnore(ctx context.Context, path string) (bool, error)
+
+	// RestoreFile restores a file from the VCS (discards working copy changes).
+	// For git: git restore path. For jj: jj restore path.
+	RestoreFile(ctx context.Context, path string) error
+
+	// ResetHard resets the working copy to match the given ref.
+	// For git: git reset --hard ref. For jj: jj edit ref.
+	ResetHard(ctx context.Context, ref string) error
+
+	// ForcePush pushes with force-with-lease semantics.
+	// For git: git push --force-with-lease. For jj: jj git push with force.
+	ForcePush(ctx context.Context, remote, branch string) error
+
+	// GetCommonDir returns the shared/common VCS directory.
+	// For git: git rev-parse --git-common-dir. For jj: .jj directory.
+	GetCommonDir(ctx context.Context) (string, error)
+
+	// ListTrackedFiles returns tracked files matching a path prefix.
+	// For git: git ls-files path. For jj: jj file list path.
+	ListTrackedFiles(ctx context.Context, path string) ([]string, error)
 }
 
 // CommitOptions provides additional options for commits.

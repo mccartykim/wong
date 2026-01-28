@@ -366,6 +366,68 @@ func (vc *VCSContext) VcsConfigureMergeDriver(ctx context.Context, driverCmd, dr
 	return vc.VCS.ConfigureMergeDriver(ctx, driverCmd, driverName)
 }
 
+// --- Phase 4: Doctor/maintenance wrappers ---
+
+// VcsDiffHasChanges returns true if the file differs from the given ref.
+func (vc *VCSContext) VcsDiffHasChanges(ctx context.Context, ref, path string) (bool, error) {
+	return vc.VCS.DiffHasChanges(ctx, ref, path)
+}
+
+// VcsRevListCount returns the number of commits between two refs.
+func (vc *VCSContext) VcsRevListCount(ctx context.Context, from, to string) (int, error) {
+	return vc.VCS.RevListCount(ctx, from, to)
+}
+
+// VcsMergeBase returns the common ancestor of two refs.
+func (vc *VCSContext) VcsMergeBase(ctx context.Context, ref1, ref2 string) (string, error) {
+	return vc.VCS.MergeBase(ctx, ref1, ref2)
+}
+
+// VcsGetUpstream returns the upstream tracking ref.
+func (vc *VCSContext) VcsGetUpstream(ctx context.Context) (string, error) {
+	return vc.VCS.GetUpstream(ctx)
+}
+
+// VcsCheckIgnore returns true if the path is ignored.
+func (vc *VCSContext) VcsCheckIgnore(ctx context.Context, path string) (bool, error) {
+	return vc.VCS.CheckIgnore(ctx, path)
+}
+
+// VcsRestoreFile restores a file from VCS.
+func (vc *VCSContext) VcsRestoreFile(ctx context.Context, path string) error {
+	return vc.VCS.RestoreFile(ctx, path)
+}
+
+// VcsResetHard resets the working copy to match the given ref.
+func (vc *VCSContext) VcsResetHard(ctx context.Context, ref string) error {
+	return vc.VCS.ResetHard(ctx, ref)
+}
+
+// VcsForcePush pushes with force-with-lease semantics.
+func (vc *VCSContext) VcsForcePush(ctx context.Context, remote, branch string) error {
+	return vc.VCS.ForcePush(ctx, remote, branch)
+}
+
+// VcsGetCommonDir returns the shared/common VCS directory.
+func (vc *VCSContext) VcsGetCommonDir(ctx context.Context) (string, error) {
+	return vc.VCS.GetCommonDir(ctx)
+}
+
+// VcsListTrackedFiles returns tracked files matching a path prefix.
+func (vc *VCSContext) VcsListTrackedFiles(ctx context.Context, path string) ([]string, error) {
+	return vc.VCS.ListTrackedFiles(ctx, path)
+}
+
+// VcsUntrackFiles stops tracking files without deleting them.
+func (vc *VCSContext) VcsUntrackFiles(ctx context.Context, paths ...string) error {
+	return vc.VCS.UntrackFiles(ctx, paths...)
+}
+
+// VcsDeleteBranch deletes a branch/bookmark.
+func (vc *VCSContext) VcsDeleteBranch(ctx context.Context, name string) error {
+	return vc.VCS.DeleteBranch(ctx, name)
+}
+
 // mapGitToJJ translates common git commands to jj equivalents.
 func (vc *VCSContext) mapGitToJJ(ctx context.Context, args ...string) *exec.Cmd {
 	if len(args) == 0 {

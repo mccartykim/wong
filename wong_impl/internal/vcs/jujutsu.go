@@ -1023,6 +1023,120 @@ func (j *JujutsuVCS) Snapshot(ctx context.Context) error {
 	return err
 }
 
+// --- Phase 4: Doctor/maintenance operations ---
+
+// DiffHasChanges returns true if the file differs from the given ref.
+func (j *JujutsuVCS) DiffHasChanges(ctx context.Context, ref, path string) (bool, error) {
+	output, err := j.runJJ(ctx, "diff", "-r", ref, "--stat", path)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(output) != "", nil
+}
+
+// RevListCount returns the number of changes between two revsets.
+func (j *JujutsuVCS) RevListCount(ctx context.Context, from, to string) (int, error) {
+	revset := fmt.Sprintf("(%s)..(%s)", from, to)
+	output, err := j.runJJ(ctx, "log", "--no-graph", "-r", revset, "-T", "change_id.short(8) ++ \"\\n\"")
+	if err != nil {
+		return 0, err
+	}
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return 0, nil
+	}
+	return len(strings.Split(output, "\n")), nil
+}
+
+// MergeBase returns the common ancestor of two refs.
+func (j *JujutsuVCS) MergeBase(ctx context.Context, ref1, ref2 string) (string, error) {
+	revset := fmt.Sprintf("heads(::%s & ::%s)", ref1, ref2)
+	output, err := j.runJJ(ctx, "log", "--no-graph", "-r", revset, "-T", "commit_id.short(12)")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(output), nil
+}
+
+// GetUpstream returns the upstream tracking ref.
+func (j *JujutsuVCS) GetUpstream(ctx context.Context) (string, error) {
+	// jj bookmarks track remotes; get the first remote bookmark
+	output, err := j.runJJ(ctx, "bookmark", "list", "--tracked")
+	if err != nil {
+		return "", fmt.Errorf("no upstream configured: %w", err)
+	}
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return "", fmt.Errorf("no tracked bookmarks")
+	}
+	// Return the first tracked bookmark name
+	lines := strings.Split(output, "\n")
+	if len(lines) > 0 {
+		// Format: "name@remote: commit_id description"
+		parts := strings.Fields(lines[0])
+		if len(parts) > 0 {
+			return parts[0], nil
+		}
+	}
+	return "", fmt.Errorf("could not parse tracked bookmarks")
+}
+
+// CheckIgnore returns true if the path is ignored (jj uses .gitignore format).
+func (j *JujutsuVCS) CheckIgnore(ctx context.Context, path string) (bool, error) {
+	// jj doesn't have a direct check-ignore command
+	// Check if the file is listed by jj file list (tracked) or exists but not listed (ignored)
+	output, err := j.runJJ(ctx, "file", "list", path)
+	if err != nil {
+		return false, err
+	}
+	// If the file exists but is not in jj file list, it's ignored
+	if strings.TrimSpace(output) == "" {
+		// File not tracked - could be ignored or just untracked
+		// For safety, check if it exists
+		if _, statErr := os.Stat(filepath.Join(j.repoRoot, path)); statErr == nil {
+			return true, nil // File exists but not tracked → ignored
+		}
+		return false, nil // File doesn't exist
+	}
+	return false, nil // File is tracked → not ignored
+}
+
+// RestoreFile restores a file from jj (discards working copy changes).
+func (j *JujutsuVCS) RestoreFile(ctx context.Context, path string) error {
+	_, err := j.runJJ(ctx, "restore", path)
+	return err
+}
+
+// ResetHard resets the working copy by editing the given ref.
+func (j *JujutsuVCS) ResetHard(ctx context.Context, ref string) error {
+	_, err := j.runJJ(ctx, "edit", ref)
+	return err
+}
+
+// ForcePush pushes with force semantics.
+func (j *JujutsuVCS) ForcePush(ctx context.Context, remote, branch string) error {
+	_, err := j.runJJ(ctx, "git", "push", "--remote", remote, "--bookmark", branch, "--allow-new")
+	return err
+}
+
+// GetCommonDir returns the .jj directory path.
+func (j *JujutsuVCS) GetCommonDir(ctx context.Context) (string, error) {
+	return filepath.Join(j.repoRoot, ".jj"), nil
+}
+
+// ListTrackedFiles returns tracked files matching a path prefix.
+func (j *JujutsuVCS) ListTrackedFiles(ctx context.Context, path string) ([]string, error) {
+	output, err := j.runJJ(ctx, "file", "list", path)
+	if err != nil {
+		return nil, err
+	}
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return nil, nil
+	}
+	return strings.Split(output, "\n"), nil
+}
+
 // Ensure JujutsuVCS implements VCS.
 var _ VCS = (*JujutsuVCS)(nil)
 

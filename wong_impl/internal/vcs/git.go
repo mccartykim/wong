@@ -977,5 +977,102 @@ func (g *GitVCS) ConfigureMergeDriver(ctx context.Context, driverCmd, driverName
 	return nil
 }
 
+// --- Phase 4: Doctor/maintenance operations ---
+
+// DiffHasChanges returns true if the file differs from the given ref.
+func (g *GitVCS) DiffHasChanges(ctx context.Context, ref, path string) (bool, error) {
+	_, err := g.runGit(ctx, "diff", "--quiet", ref, "--", path)
+	if err != nil {
+		if _, ok := err.(*CommandError); ok {
+			return true, nil // diff --quiet exits 1 when there are changes
+		}
+		return false, err
+	}
+	return false, nil
+}
+
+// RevListCount returns the number of commits between two refs.
+func (g *GitVCS) RevListCount(ctx context.Context, from, to string) (int, error) {
+	output, err := g.runGit(ctx, "rev-list", "--count", from+".."+to)
+	if err != nil {
+		return 0, err
+	}
+	var count int
+	if _, err := fmt.Sscanf(strings.TrimSpace(output), "%d", &count); err != nil {
+		return 0, fmt.Errorf("parsing rev-list count: %w", err)
+	}
+	return count, nil
+}
+
+// MergeBase returns the common ancestor of two refs.
+func (g *GitVCS) MergeBase(ctx context.Context, ref1, ref2 string) (string, error) {
+	output, err := g.runGit(ctx, "merge-base", ref1, ref2)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(output), nil
+}
+
+// GetUpstream returns the upstream tracking ref for the current branch.
+func (g *GitVCS) GetUpstream(ctx context.Context) (string, error) {
+	output, err := g.runGit(ctx, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(output), nil
+}
+
+// CheckIgnore returns true if the path is ignored.
+func (g *GitVCS) CheckIgnore(ctx context.Context, path string) (bool, error) {
+	_, err := g.runGit(ctx, "check-ignore", "-q", path)
+	if err != nil {
+		if _, ok := err.(*CommandError); ok {
+			return false, nil // check-ignore exits 1 when NOT ignored
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// RestoreFile restores a file from git (discards working copy changes).
+func (g *GitVCS) RestoreFile(ctx context.Context, path string) error {
+	_, err := g.runGit(ctx, "restore", path)
+	return err
+}
+
+// ResetHard resets the working copy to match the given ref.
+func (g *GitVCS) ResetHard(ctx context.Context, ref string) error {
+	_, err := g.runGit(ctx, "reset", "--hard", ref)
+	return err
+}
+
+// ForcePush pushes with force-with-lease semantics.
+func (g *GitVCS) ForcePush(ctx context.Context, remote, branch string) error {
+	_, err := g.runGit(ctx, "push", "--force-with-lease", remote, branch)
+	return err
+}
+
+// GetCommonDir returns the shared git directory (for worktrees).
+func (g *GitVCS) GetCommonDir(ctx context.Context) (string, error) {
+	output, err := g.runGit(ctx, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(output), nil
+}
+
+// ListTrackedFiles returns tracked files matching a path prefix.
+func (g *GitVCS) ListTrackedFiles(ctx context.Context, path string) ([]string, error) {
+	output, err := g.runGit(ctx, "ls-files", path)
+	if err != nil {
+		return nil, err
+	}
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return nil, nil
+	}
+	return strings.Split(output, "\n"), nil
+}
+
 // Ensure GitVCS implements VCS.
 var _ VCS = (*GitVCS)(nil)

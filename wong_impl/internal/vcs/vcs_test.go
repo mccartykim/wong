@@ -2,6 +2,7 @@ package vcs
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1863,5 +1864,237 @@ func TestJujutsuVCS_HookMethodsAreNoOps(t *testing.T) {
 	// ConfigureMergeDriver should be no-op
 	if err := jjVCS.ConfigureMergeDriver(ctx, "cmd", "name"); err != nil {
 		t.Errorf("ConfigureMergeDriver should be no-op, got: %v", err)
+	}
+}
+
+// --- Phase 4: Doctor/maintenance operation tests ---
+
+func TestGitVCS_DiffHasChanges(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("diff-changes-test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Create and commit a file
+	h.WriteFile(repoPath, "data.txt", "initial")
+	h.runCmd(repoPath, "git", "add", "data.txt")
+	h.runCmd(repoPath, "git", "commit", "-m", "initial")
+
+	// No changes yet
+	changed, err := gitVCS.DiffHasChanges(ctx, "HEAD", "data.txt")
+	if err != nil {
+		t.Fatalf("DiffHasChanges (no changes): %v", err)
+	}
+	if changed {
+		t.Error("expected no changes for unmodified file")
+	}
+
+	// Modify the file
+	h.WriteFile(repoPath, "data.txt", "modified")
+	h.runCmd(repoPath, "git", "add", "data.txt")
+
+	changed, err = gitVCS.DiffHasChanges(ctx, "HEAD", "data.txt")
+	if err != nil {
+		t.Fatalf("DiffHasChanges (after modify): %v", err)
+	}
+	if !changed {
+		t.Error("expected changes after modification")
+	}
+}
+
+func TestGitVCS_RevListCount(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("revlist-count-test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Create initial commit on a known branch
+	h.runCmd(repoPath, "git", "checkout", "-b", "trunk")
+	h.WriteFile(repoPath, "file.txt", "v1")
+	h.runCmd(repoPath, "git", "add", "file.txt")
+	h.runCmd(repoPath, "git", "commit", "-m", "v1")
+
+	// Create a branch and add 3 commits
+	h.runCmd(repoPath, "git", "checkout", "-b", "feature")
+	for i := 2; i <= 4; i++ {
+		h.WriteFile(repoPath, "file.txt", fmt.Sprintf("v%d", i))
+		h.runCmd(repoPath, "git", "add", "file.txt")
+		h.runCmd(repoPath, "git", "commit", "-m", fmt.Sprintf("v%d", i))
+	}
+
+	// Count commits from trunk to feature
+	count, err := gitVCS.RevListCount(ctx, "trunk", "feature")
+	if err != nil {
+		t.Fatalf("RevListCount: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("expected 3 commits, got %d", count)
+	}
+}
+
+func TestGitVCS_MergeBase(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("merge-base-test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Create initial commit on a known branch
+	h.runCmd(repoPath, "git", "checkout", "-b", "trunk")
+	h.WriteFile(repoPath, "file.txt", "initial")
+	h.runCmd(repoPath, "git", "add", "file.txt")
+	h.runCmd(repoPath, "git", "commit", "-m", "initial")
+
+	// Get initial commit hash
+	initialHash, err := gitVCS.ResolveRef(ctx, "HEAD")
+	if err != nil {
+		t.Fatalf("ResolveRef: %v", err)
+	}
+
+	// Create branch and diverge
+	h.runCmd(repoPath, "git", "checkout", "-b", "feature")
+	h.WriteFile(repoPath, "feature.txt", "feature")
+	h.runCmd(repoPath, "git", "add", "feature.txt")
+	h.runCmd(repoPath, "git", "commit", "-m", "feature commit")
+
+	h.runCmd(repoPath, "git", "checkout", "trunk")
+	h.WriteFile(repoPath, "main.txt", "main")
+	h.runCmd(repoPath, "git", "add", "main.txt")
+	h.runCmd(repoPath, "git", "commit", "-m", "trunk commit")
+
+	// Merge base should be the initial commit
+	base, err := gitVCS.MergeBase(ctx, "trunk", "feature")
+	if err != nil {
+		t.Fatalf("MergeBase: %v", err)
+	}
+	if base != initialHash {
+		t.Errorf("expected merge base %s, got %s", initialHash, base)
+	}
+}
+
+func TestGitVCS_CheckIgnore(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("check-ignore-test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Create .gitignore
+	h.WriteFile(repoPath, ".gitignore", "*.log\n")
+	h.runCmd(repoPath, "git", "add", ".gitignore")
+	h.runCmd(repoPath, "git", "commit", "-m", "add gitignore")
+
+	// .log file should be ignored
+	h.WriteFile(repoPath, "test.log", "log data")
+	ignored, err := gitVCS.CheckIgnore(ctx, "test.log")
+	if err != nil {
+		t.Fatalf("CheckIgnore(test.log): %v", err)
+	}
+	if !ignored {
+		t.Error("expected test.log to be ignored")
+	}
+
+	// .txt file should NOT be ignored
+	h.WriteFile(repoPath, "test.txt", "text data")
+	ignored, err = gitVCS.CheckIgnore(ctx, "test.txt")
+	if err != nil {
+		t.Fatalf("CheckIgnore(test.txt): %v", err)
+	}
+	if ignored {
+		t.Error("expected test.txt to NOT be ignored")
+	}
+}
+
+func TestGitVCS_RestoreFile(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("restore-test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Create and commit
+	h.WriteFile(repoPath, "data.txt", "original")
+	h.runCmd(repoPath, "git", "add", "data.txt")
+	h.runCmd(repoPath, "git", "commit", "-m", "initial")
+
+	// Modify the file
+	h.WriteFile(repoPath, "data.txt", "modified")
+
+	// Verify it changed
+	changed, _ := gitVCS.DiffHasChanges(ctx, "HEAD", "data.txt")
+	if !changed {
+		t.Fatal("expected file to be modified")
+	}
+
+	// Restore it
+	if err := gitVCS.RestoreFile(ctx, "data.txt"); err != nil {
+		t.Fatalf("RestoreFile: %v", err)
+	}
+
+	// Verify restored
+	changed, _ = gitVCS.DiffHasChanges(ctx, "HEAD", "data.txt")
+	if changed {
+		t.Error("expected file to be restored to HEAD")
+	}
+}
+
+func TestGitVCS_GetCommonDir(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("common-dir-test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	commonDir, err := gitVCS.GetCommonDir(ctx)
+	if err != nil {
+		t.Fatalf("GetCommonDir: %v", err)
+	}
+	if commonDir == "" {
+		t.Error("expected non-empty common dir")
+	}
+}
+
+func TestGitVCS_ListTrackedFiles(t *testing.T) {
+	h := NewTestHelper(t)
+	repoPath := h.CreateGitRepo("list-tracked-test")
+	ctx := context.Background()
+
+	gitVCS, err := NewGitVCS(repoPath)
+	if err != nil {
+		t.Fatalf("NewGitVCS: %v", err)
+	}
+
+	// Create and commit files
+	h.WriteFile(repoPath, "a.txt", "a")
+	h.WriteFile(repoPath, "b.txt", "b")
+	h.runCmd(repoPath, "git", "add", ".")
+	h.runCmd(repoPath, "git", "commit", "-m", "add files")
+
+	files, err := gitVCS.ListTrackedFiles(ctx, ".")
+	if err != nil {
+		t.Fatalf("ListTrackedFiles: %v", err)
+	}
+	if len(files) < 2 {
+		t.Errorf("expected at least 2 tracked files, got %d", len(files))
 	}
 }

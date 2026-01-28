@@ -789,3 +789,134 @@ func vcsStatusPorcelain(ctx context.Context) ([]vcs.StatusEntry, error) {
 	}
 	return vc.VcsStatus(ctx)
 }
+
+// --- Phase 4: Doctor/maintenance bridge functions ---
+
+// vcsDiffHasChanges returns true if the file differs from the given ref.
+// Replacement for: exec.Command("git", "diff", "--quiet", "HEAD", "--", path)
+func vcsDiffHasChanges(ctx context.Context, ref, path string) (bool, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return false, fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsDiffHasChanges(ctx, ref, path)
+}
+
+// vcsRevListCount returns the number of commits between two refs.
+// Replacement for: exec.Command("git", "rev-list", "--count", from+".."+to)
+func vcsRevListCount(ctx context.Context, from, to string) (int, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return 0, fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsRevListCount(ctx, from, to)
+}
+
+// vcsMergeBase returns the common ancestor of two refs.
+// Replacement for: exec.Command("git", "merge-base", ref1, ref2)
+func vcsMergeBase(ctx context.Context, ref1, ref2 string) (string, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return "", fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsMergeBase(ctx, ref1, ref2)
+}
+
+// vcsGetUpstream returns the upstream tracking ref for the current branch.
+// Replacement for: exec.Command("git", "rev-parse", "--abbrev-ref", "@{u}")
+func vcsGetUpstream(ctx context.Context) (string, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return "", fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsGetUpstream(ctx)
+}
+
+// vcsCheckIgnore returns true if the path is ignored by VCS ignore rules.
+// Replacement for: exec.Command("git", "check-ignore", "-q", path)
+func vcsCheckIgnore(ctx context.Context, path string) (bool, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return false, fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsCheckIgnore(ctx, path)
+}
+
+// vcsRestoreFile restores a file from VCS (discards working copy changes).
+// Replacement for: exec.Command("git", "restore", path)
+func vcsRestoreFile(ctx context.Context, path string) error {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsRestoreFile(ctx, path)
+}
+
+// vcsResetHard resets the working copy to match the given ref.
+// Replacement for: exec.Command("git", "reset", "--hard", ref)
+func vcsResetHard(ctx context.Context, ref string) error {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsResetHard(ctx, ref)
+}
+
+// vcsForcePush pushes with force-with-lease semantics.
+// Replacement for: exec.Command("git", "push", "--force-with-lease", remote, branch)
+func vcsForcePush(ctx context.Context, remote, branch string) error {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsForcePush(ctx, remote, branch)
+}
+
+// vcsGetCommonDir returns the shared/common VCS directory.
+// Replacement for: exec.Command("git", "rev-parse", "--git-common-dir")
+func vcsGetCommonDir(ctx context.Context) (string, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return "", fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsGetCommonDir(ctx)
+}
+
+// vcsGetCommonDirForPath returns the common VCS dir for a specific path.
+func vcsGetCommonDirForPath(ctx context.Context, path string) (string, error) {
+	vc, err := vcsGetContextForPath(path)
+	if err != nil {
+		return "", fmt.Errorf("VCS context for %s: %w", path, err)
+	}
+	return vc.VCS.GetCommonDir(ctx)
+}
+
+// vcsListTrackedFiles returns tracked files matching a path prefix.
+// Replacement for: exec.Command("git", "ls-files", path)
+func vcsListTrackedFiles(ctx context.Context, path string) ([]string, error) {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return nil, fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsListTrackedFiles(ctx, path)
+}
+
+// vcsUntrackFiles removes files from VCS tracking without deleting them.
+// Replacement for: exec.Command("git", "rm", "--cached", paths...)
+func vcsUntrackFiles(ctx context.Context, paths ...string) error {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsUntrackFiles(ctx, paths...)
+}
+
+// vcsDeleteBranch deletes a branch/bookmark.
+// Replacement for: exec.Command("git", "branch", "-D", name)
+func vcsDeleteBranch(ctx context.Context, name string) error {
+	vc, err := beads.GetVCSContext()
+	if err != nil {
+		return fmt.Errorf("getting VCS context: %w", err)
+	}
+	return vc.VcsDeleteBranch(ctx, name)
+}
