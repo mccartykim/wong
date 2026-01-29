@@ -157,7 +157,7 @@ func runJJPreCommit(ctx context.Context, repoRoot string) error {
 
 	// Flush pending changes to JSONL
 	// #nosec G204 -- command is hardcoded
-	cmd := exec.CommandContext(ctx, "bd", "sync", "--flush-only", "--no-daemon")
+	cmd := exec.CommandContext(ctx, "wong", "sync", "--flush-only", "--no-daemon")
 	cmd.Dir = repoRoot
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("flushing JSONL before jj commit: %w\nOutput: %s", err, string(output))
@@ -189,7 +189,7 @@ func runJJPostMerge(ctx context.Context, repoRoot string) error {
 
 	// Import JSONL
 	// #nosec G204 -- command is hardcoded
-	cmd := exec.CommandContext(ctx, "bd", "sync", "--import-only", "--no-git-history", "--no-daemon")
+	cmd := exec.CommandContext(ctx, "wong", "sync", "--import-only", "--no-git-history", "--no-daemon")
 	cmd.Dir = repoRoot
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("importing JSONL after jj fetch: %w\nOutput: %s", err, string(output))
@@ -209,7 +209,7 @@ func runJJPrePush(ctx context.Context, repoRoot string) error {
 
 	// Flush pending changes first
 	// #nosec G204 -- command is hardcoded
-	flushCmd := exec.CommandContext(ctx, "bd", "sync", "--flush-only", "--no-daemon")
+	flushCmd := exec.CommandContext(ctx, "wong", "sync", "--flush-only", "--no-daemon")
 	flushCmd.Dir = repoRoot
 	if output, err := flushCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("flushing JSONL before jj push: %w\nOutput: %s", err, string(output))
@@ -243,7 +243,7 @@ func jjHookWrapperScript(hookName string, jjCommand string) string {
 	sb.WriteString(fmt.Sprintf("# Command: %s\n", jjCommand))
 	sb.WriteString("set -euo pipefail\n")
 	sb.WriteString("\n")
-	sb.WriteString(fmt.Sprintf("bd hooks run %s || exit $?\n", hookName))
+	sb.WriteString(fmt.Sprintf("wong hooks run %s || exit $?\n", hookName))
 	sb.WriteString(execLine)
 	sb.WriteString("\n")
 
