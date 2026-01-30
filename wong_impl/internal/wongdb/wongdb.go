@@ -302,3 +302,79 @@ func (db *WongDB) ReadConfig(ctx context.Context) (*Config, error) {
 	}
 	return &cfg, nil
 }
+
+// Push pushes the wong-db bookmark to the remote so other clones can access the issue data.
+func (db *WongDB) Push(ctx context.Context) error {
+	// First sync any local changes
+	if err := db.Sync(ctx); err != nil {
+		return fmt.Errorf("wongdb: push: sync failed: %w", err)
+	}
+
+	// Try to push the wong-db bookmark. May need to track first.
+	_, err := db.runJJ(ctx, "git", "push", "-b", wongDBBookmark)
+	if err != nil {
+		// If bookmark not tracked, try tracking it first
+		if strings.Contains(err.Error(), "Refusing to create") {
+			if _, trackErr := db.runJJ(ctx, "bookmark", "track",
+				wongDBBookmark+"@origin"); trackErr != nil {
+				// Tracking failed - might be first push, try with --allow-new
+				if _, err2 := db.runJJ(ctx, "git", "push", "-b", wongDBBookmark,
+					"--allow-new"); err2 != nil {
+					return fmt.Errorf("wongdb: push failed: %w", err2)
+				}
+				return nil
+			}
+			// Track succeeded, retry push
+			if _, err2 := db.runJJ(ctx, "git", "push", "-b", wongDBBookmark); err2 != nil {
+				return fmt.Errorf("wongdb: push failed after tracking: %w", err2)
+			}
+			return nil
+		}
+		return fmt.Errorf("wongdb: push failed: %w", err)
+	}
+	return nil
+}
+
+// Pull fetches the wong-db bookmark from the remote and updates the local copy.
+func (db *WongDB) Pull(ctx context.Context) error {
+	// Fetch from remote
+	if _, err := db.runJJ(ctx, "git", "fetch"); err != nil {
+		return fmt.Errorf("wongdb: pull: fetch failed: %w", err)
+	}
+
+	// Check if remote wong-db exists and update local bookmark
+	// jj automatically tracks remote bookmarks on fetch
+	return nil
+}
+
+// EnsureMergeParent ensures the current working copy has wong-db as a parent.
+// This is useful after Pull when the working copy might not have wong-db as a parent.
+func (db *WongDB) EnsureMergeParent(ctx context.Context) error {
+	// Check if wong-db is already a parent of @
+	output, err := db.runJJ(ctx, "log", "-r", "parents(@) & wong-db", "--no-graph", "-T", "change_id")
+	if err == nil && strings.TrimSpace(output) != "" {
+		return nil // already a parent
+	}
+
+	// Add wong-db as a parent: create new merge
+	// Get current parents
+	parents, err := db.runJJ(ctx, "log", "-r", "parents(@)", "--no-graph", "-T", `commit_id ++ "\n"`)
+	if err != nil {
+		return fmt.Errorf("wongdb: failed to get current parents: %w", err)
+	}
+
+	// Build args for jj new with all current parents + wong-db
+	args := []string{"new"}
+	for _, p := range strings.Split(strings.TrimSpace(parents), "\n") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			args = append(args, p)
+		}
+	}
+	args = append(args, wongDBBookmark)
+
+	if _, err := db.runJJ(ctx, args...); err != nil {
+		return fmt.Errorf("wongdb: failed to add wong-db as parent: %w", err)
+	}
+	return nil
+}
