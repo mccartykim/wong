@@ -108,7 +108,7 @@ func TestRepoVCS_SyncCommit_Git(t *testing.T) {
 	ctx := context.Background()
 
 	// Test SyncCommit
-	err = rv.SyncCommit(ctx, "bd sync: test commit", ".beads/issues.jsonl")
+	err = rv.SyncCommit(ctx, "wong sync: test commit", ".beads/issues.jsonl")
 	if err != nil {
 		t.Fatalf("SyncCommit failed: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestRepoVCS_SyncCommit_Git(t *testing.T) {
 	// Check commit message
 	found := false
 	for _, entry := range log {
-		if entry.Description == "bd sync: test commit" {
+		if entry.Description == "wong sync: test commit" {
 			found = true
 			break
 		}
@@ -159,7 +159,7 @@ func TestRepoVCS_SyncCommit_Jujutsu(t *testing.T) {
 	ctx := context.Background()
 
 	// Test SyncCommit
-	err = rv.SyncCommit(ctx, "bd sync: test commit", ".beads/issues.jsonl")
+	err = rv.SyncCommit(ctx, "wong sync: test commit", ".beads/issues.jsonl")
 	if err != nil {
 		t.Fatalf("SyncCommit failed: %v", err)
 	}

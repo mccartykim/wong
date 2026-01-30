@@ -1780,8 +1780,8 @@ func TestGitVCS_ConfigureMergeDriver(t *testing.T) {
 	}
 
 	// Configure merge driver
-	driverCmd := "bd merge %A %O %A %B"
-	driverName := "bd JSONL merge driver"
+	driverCmd := "wong merge %A %O %A %B"
+	driverName := "wong JSONL merge driver"
 	if err := gitVCS.ConfigureMergeDriver(ctx, driverCmd, driverName); err != nil {
 		t.Fatalf("ConfigureMergeDriver: %v", err)
 	}
