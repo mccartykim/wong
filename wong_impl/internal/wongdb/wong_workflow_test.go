@@ -510,3 +510,163 @@ func TestE2E_WongWorkflow(t *testing.T) {
 	wsOut := runJJ(t, dir, "workspace", "list")
 	t.Logf("Workspaces:\n%s", wsOut)
 }
+
+// TestDependencyDispatch tests the ReadyIssues and IsReady methods
+// with a dependency chain: A -> B -> C (C depends on B, B depends on A).
+func TestDependencyDispatch(t *testing.T) {
+	dir := setupJJRepo(t)
+	db := New(dir)
+	ctx := context.Background()
+
+	// Initialize
+	if err := db.Init(ctx); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	now := time.Now()
+
+	// Create issue A (no dependencies - should be immediately ready)
+	issueA := &types.Issue{
+		ID:        "dep-a",
+		Title:     "Foundation work",
+		Status:    types.StatusOpen,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	// Create issue B (depends on A via "blocks" dependency)
+	issueB := &types.Issue{
+		ID:        "dep-b",
+		Title:     "Depends on A",
+		Status:    types.StatusBlocked,
+		CreatedAt: now,
+		UpdatedAt: now,
+		Dependencies: []*types.Dependency{
+			{
+				IssueID:     "dep-b",
+				DependsOnID: "dep-a",
+				Type:        types.DepBlocks,
+				CreatedAt:   now,
+			},
+		},
+	}
+
+	// Create issue C (depends on B)
+	issueC := &types.Issue{
+		ID:        "dep-c",
+		Title:     "Depends on B",
+		Status:    types.StatusBlocked,
+		CreatedAt: now,
+		UpdatedAt: now,
+		Dependencies: []*types.Dependency{
+			{
+				IssueID:     "dep-c",
+				DependsOnID: "dep-b",
+				Type:        types.DepBlocks,
+				CreatedAt:   now,
+			},
+		},
+	}
+
+	// Save all issues
+	for _, issue := range []*types.Issue{issueA, issueB, issueC} {
+		if err := db.SaveIssue(ctx, issue); err != nil {
+			t.Fatalf("SaveIssue %s: %v", issue.ID, err)
+		}
+	}
+	if err := db.Sync(ctx); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	// Phase 1: Only A should be ready
+	ready, err := db.ReadyIssues(ctx)
+	if err != nil {
+		t.Fatalf("ReadyIssues: %v", err)
+	}
+	if len(ready) != 1 || ready[0].ID != "dep-a" {
+		ids := make([]string, len(ready))
+		for i, r := range ready {
+			ids[i] = r.ID
+		}
+		t.Fatalf("Phase 1: expected [dep-a] ready, got %v", ids)
+	}
+	t.Logf("Phase 1: Only dep-a is ready (correct)")
+
+	// Check individual IsReady
+	aReady, _ := db.IsReady(ctx, "dep-a")
+	bReady, _ := db.IsReady(ctx, "dep-b")
+	cReady, _ := db.IsReady(ctx, "dep-c")
+	if !aReady || bReady || cReady {
+		t.Fatalf("Phase 1 IsReady: a=%v b=%v c=%v (expected true false false)", aReady, bReady, cReady)
+	}
+
+	// Phase 2: Close A, now B should be ready
+	issueA.Status = types.StatusClosed
+	closedAt := time.Now()
+	issueA.ClosedAt = &closedAt
+	if err := db.SaveIssue(ctx, issueA); err != nil {
+		t.Fatalf("SaveIssue dep-a (close): %v", err)
+	}
+	if err := db.Sync(ctx); err != nil {
+		t.Fatalf("Sync after close A: %v", err)
+	}
+
+	ready, err = db.ReadyIssues(ctx)
+	if err != nil {
+		t.Fatalf("ReadyIssues after A closed: %v", err)
+	}
+	if len(ready) != 1 || ready[0].ID != "dep-b" {
+		ids := make([]string, len(ready))
+		for i, r := range ready {
+			ids[i] = r.ID
+		}
+		t.Fatalf("Phase 2: expected [dep-b] ready, got %v", ids)
+	}
+	t.Logf("Phase 2: After closing A, dep-b is ready (correct)")
+
+	// Phase 3: Close B, now C should be ready
+	issueB.Status = types.StatusClosed
+	issueB.ClosedAt = &closedAt
+	if err := db.SaveIssue(ctx, issueB); err != nil {
+		t.Fatalf("SaveIssue dep-b (close): %v", err)
+	}
+	if err := db.Sync(ctx); err != nil {
+		t.Fatalf("Sync after close B: %v", err)
+	}
+
+	ready, err = db.ReadyIssues(ctx)
+	if err != nil {
+		t.Fatalf("ReadyIssues after B closed: %v", err)
+	}
+	if len(ready) != 1 || ready[0].ID != "dep-c" {
+		ids := make([]string, len(ready))
+		for i, r := range ready {
+			ids[i] = r.ID
+		}
+		t.Fatalf("Phase 3: expected [dep-c] ready, got %v", ids)
+	}
+	t.Logf("Phase 3: After closing B, dep-c is ready (correct)")
+
+	// Phase 4: Close C, no issues should be ready
+	issueC.Status = types.StatusClosed
+	issueC.ClosedAt = &closedAt
+	if err := db.SaveIssue(ctx, issueC); err != nil {
+		t.Fatalf("SaveIssue dep-c (close): %v", err)
+	}
+	if err := db.Sync(ctx); err != nil {
+		t.Fatalf("Sync after close C: %v", err)
+	}
+
+	ready, err = db.ReadyIssues(ctx)
+	if err != nil {
+		t.Fatalf("ReadyIssues after all closed: %v", err)
+	}
+	if len(ready) != 0 {
+		ids := make([]string, len(ready))
+		for i, r := range ready {
+			ids[i] = r.ID
+		}
+		t.Fatalf("Phase 4: expected no ready issues, got %v", ids)
+	}
+	t.Logf("Phase 4: All closed, no ready issues (correct)")
+}
