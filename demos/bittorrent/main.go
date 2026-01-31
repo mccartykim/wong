@@ -70,10 +70,10 @@ func main() {
 	fmt.Printf("Announce: %s\n", torrent.Announce)
 
 	// Create download config
-	cfg := &download.Config{
+	cfg := download.Config{
 		Torrent:   torrent,
 		OutputDir: cliCfg.OutputDir,
-		Port:      cliCfg.Port,
+		Port:      uint16(cliCfg.Port),
 		MaxPeers:  cliCfg.MaxPeers,
 	}
 
@@ -91,7 +91,7 @@ func main() {
 	}()
 
 	// Create downloader and run
-	downloader := download.New(cfg)
+	downloader, err := download.New(cfg)
 	if err := downloader.Run(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "Download error: %v\n", err)
 		os.Exit(1)
