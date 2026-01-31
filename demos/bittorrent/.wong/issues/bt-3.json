@@ -1,0 +1,10 @@
+{
+  "id": "bt-3",
+  "title": "Tracker HTTP client",
+  "description": "Implement BitTorrent tracker announce via HTTP GET. Send info_hash, peer_id, port, uploaded, downloaded, left, event. Parse compact peer list response. Only use net/http. Package: tracker/",
+  "status": "open",
+  "priority": 2,
+  "issue_type": "task",
+  "created_at": "2026-01-31T06:17:15.130826+00:00",
+  "updated_at": "2026-01-31T06:17:15.130826+00:00"
+}
