@@ -1,8 +1,6 @@
 package bencode
 
 import (
-	"bytes"
-	"io"
 	"strings"
 	"testing"
 )
@@ -133,7 +131,7 @@ func TestListEncode(t *testing.T) {
 		{"list of strings", []interface{}{"a", "b"}, "l1:a1:be"},
 		{"mixed list", []interface{}{1, "two", 3}, "li1e3:twoi3ee"},
 		{"nested list", []interface{}{[]interface{}{1, 2}, 3}, "lli1ei2eei3ee"},
-		{"list with empty list", []interface{}{[]interface{}{}, 42}, "llegi42ee"},
+		{"list with empty list", []interface{}{[]interface{}{}, 42}, "llei42ee"},
 	}
 
 	for _, tc := range tests {
@@ -199,13 +197,13 @@ func TestDictEncode(t *testing.T) {
 		{"simple dict", map[string]interface{}{"key": "value"}, "d3:key5:valuee"},
 		{"dict with int", map[string]interface{}{"num": int64(42)}, "d3:numi42ee"},
 		{"dict multiple keys", map[string]interface{}{"a": 1, "b": 2}, "d1:ai1e1:bi2ee"},
-		{"nested dict", map[string]interface{}{"nested": map[string]interface{}{"inner": 1}}, "d6:nestedd5:inneri1eeee"},
+		{"nested dict", map[string]interface{}{"nested": map[string]interface{}{"inner": 1}}, "d6:nestedd5:inneri1eee"},
 		{"dict with list", map[string]interface{}{"list": []interface{}{1, 2}}, "d4:listli1ei2eee"},
 		{"complex dict", map[string]interface{}{
 			"spam": "eggs",
 			"cow":  "moo",
 			"num":  42,
-		}, "d3:cow3:moo3:num i42e4:spam4:eggse"}, // Note: space in "i42e" - keys alphabetically sorted: cow, num, spam
+		}, "d3:cow3:moo3:numi42e4:spam4:eggse"}, // keys alphabetically sorted: cow, num, spam
 	}
 
 	for _, tc := range tests {

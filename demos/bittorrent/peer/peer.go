@@ -39,36 +39,48 @@ type Conn struct {
 // Handshake performs the BitTorrent handshake with a peer.
 // Format: <pstrlen=19><pstr="BitTorrent protocol"><reserved=8 bytes><info_hash=20><peer_id=20>
 func Handshake(conn net.Conn, infoHash, peerID [20]byte) (*Conn, error) {
-	// Send our handshake
 	pstr := "BitTorrent protocol"
-	handshake := make([]byte, 1+len(pstr)+8+20+20)
+	handshakeSize := 1 + len(pstr) + 8 + 20 + 20
+
+	// Build our handshake
+	handshake := make([]byte, handshakeSize)
 	handshake[0] = byte(len(pstr))
 	copy(handshake[1:], pstr)
 	copy(handshake[1+len(pstr)+8:], infoHash[:])
 	copy(handshake[1+len(pstr)+8+20:], peerID[:])
 
+	// Read peer's handshake concurrently with writing ours
+	// This is necessary because net.Pipe() is synchronous and blocks on writes
+	peerBuf := make([]byte, handshakeSize)
+	readDone := make(chan error, 1)
+
+	go func() {
+		_, err := io.ReadFull(conn, peerBuf)
+		readDone <- err
+	}()
+
+	// Send our handshake
 	if _, err := conn.Write(handshake); err != nil {
 		return nil, fmt.Errorf("write handshake: %w", err)
 	}
 
-	// Read peer's handshake
-	buf := make([]byte, 1+len(pstr)+8+20+20)
-	_, err := io.ReadFull(conn, buf)
+	// Wait for read to complete
+	err := <-readDone
 	if err != nil {
 		return nil, fmt.Errorf("read handshake: %w", err)
 	}
 
 	// Verify pstr length and pstr
-	if buf[0] != byte(len(pstr)) {
-		return nil, fmt.Errorf("invalid pstr length: got %d, expected %d", buf[0], len(pstr))
+	if peerBuf[0] != byte(len(pstr)) {
+		return nil, fmt.Errorf("invalid pstr length: got %d, expected %d", peerBuf[0], len(pstr))
 	}
-	if string(buf[1:1+len(pstr)]) != pstr {
-		return nil, fmt.Errorf("invalid pstr: got %q, expected %q", string(buf[1:1+len(pstr)]), pstr)
+	if string(peerBuf[1:1+len(pstr)]) != pstr {
+		return nil, fmt.Errorf("invalid pstr: got %q, expected %q", string(peerBuf[1:1+len(pstr)]), pstr)
 	}
 
 	// Extract peer's info hash
 	peerInfoHash := [20]byte{}
-	copy(peerInfoHash[:], buf[1+len(pstr)+8:1+len(pstr)+8+20])
+	copy(peerInfoHash[:], peerBuf[1+len(pstr)+8:1+len(pstr)+8+20])
 
 	// Verify info hash matches
 	if peerInfoHash != infoHash {
@@ -77,7 +89,7 @@ func Handshake(conn net.Conn, infoHash, peerID [20]byte) (*Conn, error) {
 
 	// Extract peer's peer ID
 	peerPeerID := [20]byte{}
-	copy(peerPeerID[:], buf[1+len(pstr)+8+20:])
+	copy(peerPeerID[:], peerBuf[1+len(pstr)+8+20:])
 
 	return &Conn{
 		conn:     conn,

@@ -29,8 +29,9 @@ type Writer struct {
 // For single-file torrents: files has one entry
 // For multi-file torrents: files has multiple entries, creates subdirectories under name/
 func NewWriter(outputDir string, name string, pieceLength int, totalLength int64, files []FileEntry) (*Writer, error) {
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create output directory: %w", err)
+	// Check if output directory exists
+	if _, err := os.Stat(outputDir); err != nil {
+		return nil, fmt.Errorf("output directory does not exist: %w", err)
 	}
 
 	w := &Writer{
@@ -192,7 +193,7 @@ type fileInfo struct {
 
 // findFileForOffset finds the file and offset within that file for a given absolute offset.
 func (w *Writer) findFileForOffset(offset int64) (*fileInfo, int64, error) {
-	for i, f := range w.files {
+	for _, f := range w.files {
 		if offset >= f.Offset && offset < f.Offset+f.Length {
 			file, ok := w.fileMap[f.Path]
 			if !ok {

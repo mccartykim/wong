@@ -18,10 +18,12 @@ func TestHandshakeSuccess(t *testing.T) {
 	serverID := [20]byte{200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219}
 
 	// Run server handshake in goroutine
+	serverDone := make(chan error, 1)
 	var serverConn *Conn
-	var serverErr error
 	go func() {
-		serverConn, serverErr = Handshake(server, infoHash, serverID)
+		var err error
+		serverConn, err = Handshake(server, infoHash, serverID)
+		serverDone <- err
 	}()
 
 	// Run client handshake
@@ -31,6 +33,8 @@ func TestHandshakeSuccess(t *testing.T) {
 		t.Fatalf("client handshake failed: %v", clientErr)
 	}
 
+	// Wait for server handshake to complete
+	serverErr := <-serverDone
 	if serverErr != nil {
 		t.Fatalf("server handshake failed: %v", serverErr)
 	}
@@ -87,13 +91,12 @@ func TestSendAndReceiveMessage(t *testing.T) {
 	serverID := [20]byte{200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219}
 
 	var clientConn, serverConn *Conn
+	serverDone := make(chan error, 1)
 
 	go func() {
 		var err error
 		serverConn, err = Handshake(server, infoHash, serverID)
-		if err != nil {
-			t.Errorf("server handshake failed: %v", err)
-		}
+		serverDone <- err
 	}()
 
 	var err error
@@ -102,20 +105,33 @@ func TestSendAndReceiveMessage(t *testing.T) {
 		t.Fatalf("client handshake failed: %v", err)
 	}
 
+	if serverErr := <-serverDone; serverErr != nil {
+		t.Fatalf("server handshake failed: %v", serverErr)
+	}
+
 	// Test sending message from client to server
 	testMsg := &Message{
 		ID:      MsgInterested,
 		Payload: []byte{},
 	}
 
+	// Server must be reading before client writes (net.Pipe() is synchronous)
+	receivedMsgChan := make(chan *Message, 1)
+	readErrChan := make(chan error, 1)
+	go func() {
+		msg, err := serverConn.ReadMessage()
+		receivedMsgChan <- msg
+		readErrChan <- err
+	}()
+
 	err = clientConn.SendMessage(testMsg)
 	if err != nil {
 		t.Fatalf("send message failed: %v", err)
 	}
 
-	receivedMsg, err := serverConn.ReadMessage()
-	if err != nil {
-		t.Fatalf("read message failed: %v", err)
+	receivedMsg := <-receivedMsgChan
+	if readErr := <-readErrChan; readErr != nil {
+		t.Fatalf("read message failed: %v", readErr)
 	}
 
 	if receivedMsg.ID != MsgInterested {
@@ -134,13 +150,12 @@ func TestKeepAlive(t *testing.T) {
 	serverID := [20]byte{200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219}
 
 	var clientConn, serverConn *Conn
+	serverDone := make(chan error, 1)
 
 	go func() {
 		var err error
 		serverConn, err = Handshake(server, infoHash, serverID)
-		if err != nil {
-			t.Errorf("server handshake failed: %v", err)
-		}
+		serverDone <- err
 	}()
 
 	var err error
@@ -149,6 +164,19 @@ func TestKeepAlive(t *testing.T) {
 		t.Fatalf("client handshake failed: %v", err)
 	}
 
+	if serverErr := <-serverDone; serverErr != nil {
+		t.Fatalf("server handshake failed: %v", serverErr)
+	}
+
+	// Server must be reading before client sends keep-alive
+	msgChan := make(chan *Message, 1)
+	errChan := make(chan error, 1)
+	go func() {
+		msg, err := serverConn.ReadMessage()
+		msgChan <- msg
+		errChan <- err
+	}()
+
 	// Send keep-alive from client
 	err = clientConn.SendKeepAlive()
 	if err != nil {
@@ -156,9 +184,9 @@ func TestKeepAlive(t *testing.T) {
 	}
 
 	// Read keep-alive on server (should return nil)
-	msg, err := serverConn.ReadMessage()
-	if err != nil {
-		t.Fatalf("read keep-alive failed: %v", err)
+	msg := <-msgChan
+	if readErr := <-errChan; readErr != nil {
+		t.Fatalf("read keep-alive failed: %v", readErr)
 	}
 
 	if msg != nil {
@@ -311,13 +339,12 @@ func TestSendInterested(t *testing.T) {
 	serverID := [20]byte{200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219}
 
 	var clientConn, serverConn *Conn
+	serverDone := make(chan error, 1)
 
 	go func() {
 		var err error
 		serverConn, err = Handshake(server, infoHash, serverID)
-		if err != nil {
-			t.Errorf("server handshake failed: %v", err)
-		}
+		serverDone <- err
 	}()
 
 	var err error
@@ -326,14 +353,26 @@ func TestSendInterested(t *testing.T) {
 		t.Fatalf("client handshake failed: %v", err)
 	}
 
+	if serverErr := <-serverDone; serverErr != nil {
+		t.Fatalf("server handshake failed: %v", serverErr)
+	}
+
+	msgChan := make(chan *Message, 1)
+	errChan := make(chan error, 1)
+	go func() {
+		msg, err := serverConn.ReadMessage()
+		msgChan <- msg
+		errChan <- err
+	}()
+
 	err = clientConn.SendInterested()
 	if err != nil {
 		t.Fatalf("SendInterested failed: %v", err)
 	}
 
-	msg, err := serverConn.ReadMessage()
-	if err != nil {
-		t.Fatalf("read message failed: %v", err)
+	msg := <-msgChan
+	if readErr := <-errChan; readErr != nil {
+		t.Fatalf("read message failed: %v", readErr)
 	}
 
 	if msg.ID != MsgInterested {
@@ -352,13 +391,12 @@ func TestSendNotInterested(t *testing.T) {
 	serverID := [20]byte{200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219}
 
 	var clientConn, serverConn *Conn
+	serverDone := make(chan error, 1)
 
 	go func() {
 		var err error
 		serverConn, err = Handshake(server, infoHash, serverID)
-		if err != nil {
-			t.Errorf("server handshake failed: %v", err)
-		}
+		serverDone <- err
 	}()
 
 	var err error
@@ -367,14 +405,26 @@ func TestSendNotInterested(t *testing.T) {
 		t.Fatalf("client handshake failed: %v", err)
 	}
 
+	if serverErr := <-serverDone; serverErr != nil {
+		t.Fatalf("server handshake failed: %v", serverErr)
+	}
+
+	msgChan := make(chan *Message, 1)
+	errChan := make(chan error, 1)
+	go func() {
+		msg, err := serverConn.ReadMessage()
+		msgChan <- msg
+		errChan <- err
+	}()
+
 	err = clientConn.SendNotInterested()
 	if err != nil {
 		t.Fatalf("SendNotInterested failed: %v", err)
 	}
 
-	msg, err := serverConn.ReadMessage()
-	if err != nil {
-		t.Fatalf("read message failed: %v", err)
+	msg := <-msgChan
+	if readErr := <-errChan; readErr != nil {
+		t.Fatalf("read message failed: %v", readErr)
 	}
 
 	if msg.ID != MsgNotInterested {
@@ -393,13 +443,12 @@ func TestSendRequest(t *testing.T) {
 	serverID := [20]byte{200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219}
 
 	var clientConn, serverConn *Conn
+	serverDone := make(chan error, 1)
 
 	go func() {
 		var err error
 		serverConn, err = Handshake(server, infoHash, serverID)
-		if err != nil {
-			t.Errorf("server handshake failed: %v", err)
-		}
+		serverDone <- err
 	}()
 
 	var err error
@@ -408,14 +457,26 @@ func TestSendRequest(t *testing.T) {
 		t.Fatalf("client handshake failed: %v", err)
 	}
 
+	if serverErr := <-serverDone; serverErr != nil {
+		t.Fatalf("server handshake failed: %v", serverErr)
+	}
+
+	msgChan := make(chan *Message, 1)
+	errChan := make(chan error, 1)
+	go func() {
+		msg, err := serverConn.ReadMessage()
+		msgChan <- msg
+		errChan <- err
+	}()
+
 	err = clientConn.SendRequest(5, 1024, 16384)
 	if err != nil {
 		t.Fatalf("SendRequest failed: %v", err)
 	}
 
-	msg, err := serverConn.ReadMessage()
-	if err != nil {
-		t.Fatalf("read message failed: %v", err)
+	msg := <-msgChan
+	if readErr := <-errChan; readErr != nil {
+		t.Fatalf("read message failed: %v", readErr)
 	}
 
 	if msg.ID != MsgRequest {
@@ -443,13 +504,12 @@ func TestSendHave(t *testing.T) {
 	serverID := [20]byte{200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219}
 
 	var clientConn, serverConn *Conn
+	serverDone := make(chan error, 1)
 
 	go func() {
 		var err error
 		serverConn, err = Handshake(server, infoHash, serverID)
-		if err != nil {
-			t.Errorf("server handshake failed: %v", err)
-		}
+		serverDone <- err
 	}()
 
 	var err error
@@ -458,14 +518,26 @@ func TestSendHave(t *testing.T) {
 		t.Fatalf("client handshake failed: %v", err)
 	}
 
+	if serverErr := <-serverDone; serverErr != nil {
+		t.Fatalf("server handshake failed: %v", serverErr)
+	}
+
+	msgChan := make(chan *Message, 1)
+	errChan := make(chan error, 1)
+	go func() {
+		msg, err := serverConn.ReadMessage()
+		msgChan <- msg
+		errChan <- err
+	}()
+
 	err = clientConn.SendHave(42)
 	if err != nil {
 		t.Fatalf("SendHave failed: %v", err)
 	}
 
-	msg, err := serverConn.ReadMessage()
-	if err != nil {
-		t.Fatalf("read message failed: %v", err)
+	msg := <-msgChan
+	if readErr := <-errChan; readErr != nil {
+		t.Fatalf("read message failed: %v", readErr)
 	}
 
 	if msg.ID != MsgHave {
@@ -493,13 +565,12 @@ func TestSendChoke(t *testing.T) {
 	serverID := [20]byte{200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219}
 
 	var clientConn, serverConn *Conn
+	serverDone := make(chan error, 1)
 
 	go func() {
 		var err error
 		serverConn, err = Handshake(server, infoHash, serverID)
-		if err != nil {
-			t.Errorf("server handshake failed: %v", err)
-		}
+		serverDone <- err
 	}()
 
 	var err error
@@ -508,14 +579,26 @@ func TestSendChoke(t *testing.T) {
 		t.Fatalf("client handshake failed: %v", err)
 	}
 
+	if serverErr := <-serverDone; serverErr != nil {
+		t.Fatalf("server handshake failed: %v", serverErr)
+	}
+
+	msgChan := make(chan *Message, 1)
+	errChan := make(chan error, 1)
+	go func() {
+		msg, err := serverConn.ReadMessage()
+		msgChan <- msg
+		errChan <- err
+	}()
+
 	err = clientConn.SendChoke()
 	if err != nil {
 		t.Fatalf("SendChoke failed: %v", err)
 	}
 
-	msg, err := serverConn.ReadMessage()
-	if err != nil {
-		t.Fatalf("read message failed: %v", err)
+	msg := <-msgChan
+	if readErr := <-errChan; readErr != nil {
+		t.Fatalf("read message failed: %v", readErr)
 	}
 
 	if msg.ID != MsgChoke {
@@ -534,13 +617,12 @@ func TestSendUnchoke(t *testing.T) {
 	serverID := [20]byte{200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219}
 
 	var clientConn, serverConn *Conn
+	serverDone := make(chan error, 1)
 
 	go func() {
 		var err error
 		serverConn, err = Handshake(server, infoHash, serverID)
-		if err != nil {
-			t.Errorf("server handshake failed: %v", err)
-		}
+		serverDone <- err
 	}()
 
 	var err error
@@ -549,14 +631,26 @@ func TestSendUnchoke(t *testing.T) {
 		t.Fatalf("client handshake failed: %v", err)
 	}
 
+	if serverErr := <-serverDone; serverErr != nil {
+		t.Fatalf("server handshake failed: %v", serverErr)
+	}
+
+	msgChan := make(chan *Message, 1)
+	errChan := make(chan error, 1)
+	go func() {
+		msg, err := serverConn.ReadMessage()
+		msgChan <- msg
+		errChan <- err
+	}()
+
 	err = clientConn.SendUnchoke()
 	if err != nil {
 		t.Fatalf("SendUnchoke failed: %v", err)
 	}
 
-	msg, err := serverConn.ReadMessage()
-	if err != nil {
-		t.Fatalf("read message failed: %v", err)
+	msg := <-msgChan
+	if readErr := <-errChan; readErr != nil {
+		t.Fatalf("read message failed: %v", readErr)
 	}
 
 	if msg.ID != MsgUnchoke {
@@ -575,13 +669,12 @@ func TestSendBitfield(t *testing.T) {
 	serverID := [20]byte{200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219}
 
 	var clientConn, serverConn *Conn
+	serverDone := make(chan error, 1)
 
 	go func() {
 		var err error
 		serverConn, err = Handshake(server, infoHash, serverID)
-		if err != nil {
-			t.Errorf("server handshake failed: %v", err)
-		}
+		serverDone <- err
 	}()
 
 	var err error
@@ -590,15 +683,27 @@ func TestSendBitfield(t *testing.T) {
 		t.Fatalf("client handshake failed: %v", err)
 	}
 
+	if serverErr := <-serverDone; serverErr != nil {
+		t.Fatalf("server handshake failed: %v", serverErr)
+	}
+
+	msgChan := make(chan *Message, 1)
+	errChan := make(chan error, 1)
+	go func() {
+		msg, err := serverConn.ReadMessage()
+		msgChan <- msg
+		errChan <- err
+	}()
+
 	bitfield := []byte{0xFF, 0x00, 0xAA}
 	err = clientConn.SendBitfield(bitfield)
 	if err != nil {
 		t.Fatalf("SendBitfield failed: %v", err)
 	}
 
-	msg, err := serverConn.ReadMessage()
-	if err != nil {
-		t.Fatalf("read message failed: %v", err)
+	msg := <-msgChan
+	if readErr := <-errChan; readErr != nil {
+		t.Fatalf("read message failed: %v", readErr)
 	}
 
 	if msg.ID != MsgBitfield {

@@ -54,7 +54,7 @@ func TestCompactPeersParsing(t *testing.T) {
 	// Peer 1: 192.168.1.1:6881
 	// Peer 2: 10.0.0.1:6882
 	var compactPeers []byte
-	
+
 	// Peer 1: 192.168.1.1 (c0.a8.01.01) port 6881 (1ae9)
 	compactPeers = append(compactPeers, byte(192), byte(168), byte(1), byte(1))
 	portBuf := make([]byte, 2)
@@ -83,24 +83,6 @@ func TestCompactPeersParsing(t *testing.T) {
 		w.Write(encoded)
 	}))
 	defer server.Close()
-
-	// Mock bencode.Encode and Decode for this test
-	originalEncode := bencode.Encode
-	originalDecode := bencode.Decode
-
-	bencode.Encode = func(v interface{}) ([]byte, error) {
-		// Simple bencode encoding for testing
-		return encodeTestDict(v)
-	}
-
-	bencode.Decode = func(data []byte) (interface{}, error) {
-		return decodeTestDict(data)
-	}
-
-	defer func() {
-		bencode.Encode = originalEncode
-		bencode.Decode = originalDecode
-	}()
 
 	// Make announce request
 	req := &AnnounceRequest{
@@ -171,23 +153,6 @@ func TestNonCompactPeersParsing(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Mock bencode functions
-	originalEncode := bencode.Encode
-	originalDecode := bencode.Decode
-
-	bencode.Encode = func(v interface{}) ([]byte, error) {
-		return encodeTestDict(v)
-	}
-
-	bencode.Decode = func(data []byte) (interface{}, error) {
-		return decodeTestDict(data)
-	}
-
-	defer func() {
-		bencode.Encode = originalEncode
-		bencode.Decode = originalDecode
-	}()
-
 	// Make announce request
 	req := &AnnounceRequest{
 		AnnounceURL: server.URL,
@@ -245,23 +210,6 @@ func TestURLEncoding(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Mock bencode functions
-	originalEncode := bencode.Encode
-	originalDecode := bencode.Decode
-
-	bencode.Encode = func(v interface{}) ([]byte, error) {
-		return encodeTestDict(v)
-	}
-
-	bencode.Decode = func(data []byte) (interface{}, error) {
-		return decodeTestDict(data)
-	}
-
-	defer func() {
-		bencode.Encode = originalEncode
-		bencode.Decode = originalDecode
-	}()
-
 	// Create a specific info hash
 	var infoHash [20]byte
 	for i := 0; i < 20; i++ {
@@ -318,23 +266,6 @@ func TestTrackerFailureReason(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Mock bencode functions
-	originalEncode := bencode.Encode
-	originalDecode := bencode.Decode
-
-	bencode.Encode = func(v interface{}) ([]byte, error) {
-		return encodeTestDict(v)
-	}
-
-	bencode.Decode = func(data []byte) (interface{}, error) {
-		return decodeTestDict(data)
-	}
-
-	defer func() {
-		bencode.Encode = originalEncode
-		bencode.Decode = originalDecode
-	}()
-
 	req := &AnnounceRequest{
 		AnnounceURL: server.URL,
 		InfoHash:    [20]byte{},
@@ -389,17 +320,6 @@ func TestMalformedResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Mock bencode functions to return error
-	originalDecode := bencode.Decode
-
-	bencode.Decode = func(data []byte) (interface{}, error) {
-		return nil, fmt.Errorf("invalid bencode data")
-	}
-
-	defer func() {
-		bencode.Decode = originalDecode
-	}()
-
 	req := &AnnounceRequest{
 		AnnounceURL: server.URL,
 		InfoHash:    [20]byte{},
@@ -422,144 +342,4 @@ func TestNilRequest(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for nil request, got nil")
 	}
-}
-
-// Helper functions for testing
-
-func encodeTestDict(v interface{}) ([]byte, error) {
-	// Simple test encoding that handles the cases we need
-	dict, ok := v.(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("not a dict")
-	}
-
-	var buf bytes.Buffer
-	buf.WriteString("d")
-
-	// Encode interval
-	if iv, ok := dict["interval"]; ok {
-		buf.WriteString("8:interval")
-		switch val := iv.(type) {
-		case int64:
-			buf.WriteString(fmt.Sprintf("i%de", val))
-		case int:
-			buf.WriteString(fmt.Sprintf("i%de", val))
-		}
-	}
-
-	// Encode peers if it's bytes (compact format)
-	if peers, ok := dict["peers"]; ok {
-		buf.WriteString("5:peers")
-		switch val := peers.(type) {
-		case []byte:
-			buf.WriteString(fmt.Sprintf("%d:", len(val)))
-			buf.Write(val)
-		case []interface{}:
-			// Handle list format
-			buf.WriteString(fmt.Sprintf("l"))
-			for _, p := range val {
-				if pDict, ok := p.(map[string]interface{}); ok {
-					buf.WriteString("d")
-					if ip, ok := pDict["ip"].(string); ok {
-						buf.WriteString(fmt.Sprintf("2:ip%d:%s", len(ip), ip))
-					}
-					if port, ok := pDict["port"].(int64); ok {
-						buf.WriteString(fmt.Sprintf("4:porti%de", port))
-					} else if port, ok := pDict["port"].(int); ok {
-						buf.WriteString(fmt.Sprintf("4:porti%de", port))
-					}
-					buf.WriteString("e")
-				}
-			}
-			buf.WriteString("e")
-		}
-	}
-
-	// Encode failure reason if present
-	if reason, ok := dict["failure reason"]; ok {
-		reasonStr := fmt.Sprintf("%v", reason)
-		buf.WriteString(fmt.Sprintf("14:failure reason%d:%s", len(reasonStr), reasonStr))
-	}
-
-	buf.WriteString("e")
-	return buf.Bytes(), nil
-}
-
-func decodeTestDict(data []byte) (interface{}, error) {
-	// Simple test decoder that parses our test bencode
-	if len(data) == 0 {
-		return nil, fmt.Errorf("empty data")
-	}
-
-	if data[0] != 'd' {
-		return nil, fmt.Errorf("not a dict")
-	}
-
-	result := make(map[string]interface{})
-
-	// Simple parsing - this is just for testing
-	dataStr := string(data)
-
-	// Parse interval
-	if bytes.Contains(data, []byte("8:interval")) {
-		idx := bytes.Index(data, []byte("8:intervali"))
-		if idx != -1 {
-			start := idx + len("8:intervali")
-			end := bytes.Index(data[start:], []byte("e"))
-			if end != -1 {
-				val := string(data[start : start+end])
-				var num int64
-				fmt.Sscanf(val, "%d", &num)
-				result["interval"] = num
-			}
-		}
-	}
-
-	// Parse peers (compact format)
-	if bytes.Contains(data, []byte("5:peers")) {
-		idx := bytes.Index(data, []byte("5:peers"))
-		if idx != -1 {
-			start := idx + len("5:peers")
-			// Find the length
-			colonIdx := bytes.Index(data[start:], []byte(":"))
-			if colonIdx != -1 {
-				lenStr := string(data[start : start+colonIdx])
-				var peerLen int
-				fmt.Sscanf(lenStr, "%d", &peerLen)
-				peersStart := start + colonIdx + 1
-				if dataStr[len("d")] == 'l' {
-					// Non-compact format - list of dicts
-					result["peers"] = parsePeerList(data[peersStart:])
-				} else {
-					// Compact format
-					result["peers"] = data[peersStart : peersStart+peerLen]
-				}
-			}
-		}
-	}
-
-	// Parse failure reason
-	if bytes.Contains(data, []byte("failure reason")) {
-		idx := bytes.Index(data, []byte("14:failure reason"))
-		if idx != -1 {
-			start := idx + len("14:failure reason")
-			colonIdx := bytes.Index(data[start:], []byte(":"))
-			if colonIdx != -1 {
-				lenStr := string(data[start : start+colonIdx])
-				var reasonLen int
-				fmt.Sscanf(lenStr, "%d", &reasonLen)
-				reasonStart := start + colonIdx + 1
-				result["failure reason"] = string(data[reasonStart : reasonStart+reasonLen])
-			}
-		}
-	}
-
-	return result, nil
-}
-
-func parsePeerList(data []byte) []interface{} {
-	var peers []interface{}
-	// Simple peer list parsing
-	// This is a simplified version for testing
-	return peers
 }

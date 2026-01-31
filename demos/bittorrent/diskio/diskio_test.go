@@ -220,7 +220,6 @@ func TestLastPieceShorterThanPieceLength(t *testing.T) {
 	// Write full pieces
 	piece0Data := bytes.Repeat([]byte{0x11}, pieceLen)
 	piece1Data := bytes.Repeat([]byte{0x22}, pieceLen)
-	piece2Data := bytes.Repeat([]byte{0x33}, pieceLen)
 
 	if err := w.WritePiece(0, piece0Data); err != nil {
 		t.Fatalf("WritePiece(0) failed: %v", err)
@@ -313,7 +312,8 @@ func TestReadPieceCorrectData(t *testing.T) {
 
 // Test 6: Error handling - write to non-existent directory
 func TestErrorNonExistentOutputDir(t *testing.T) {
-	nonExistentDir := "/tmp/definitely-does-not-exist-12345-bittorrent/subdir"
+	// Use a path in a directory that definitely won't be accessible
+	nonExistentDir := "/dev/null/bittorrent-test-nonexistent/subdir"
 	pieceLen := 16 * 1024
 	totalLen := int64(32 * 1024)
 

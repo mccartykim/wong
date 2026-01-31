@@ -65,10 +65,11 @@ func TestPieceLength(t *testing.T) {
 
 // Test 3: ReceiveBlock accumulates data correctly
 func TestReceiveBlock(t *testing.T) {
+	// Create data of 34 bytes
 	data := []byte("hello world test data for a piece")
 	hash := sha1.Sum(data)
 
-	m := NewManager(100, 100, [][20]byte{hash})
+	m := NewManager(34, 34, [][20]byte{hash})
 
 	// Receive blocks out of order
 	block1 := data[0:10]
@@ -108,14 +109,22 @@ func TestReceiveBlock(t *testing.T) {
 
 // Test 4: VerifyPiece succeeds with correct hash, fails with wrong data
 func TestVerifyPiece(t *testing.T) {
-	// Create data that's exactly 100 bytes
-	data := []byte("hello world test data for a piece that is exactly one hundred bytes long")
-	data = data[:100] // Ensure exactly 100 bytes
+	// Create data that's exactly 32 bytes
+	data := make([]byte, 32)
+	for i := 0; i < 32; i++ {
+		data[i] = byte(i % 256)
+	}
 	correctHash := sha1.Sum(data)
-	wrongHash := sha1.Sum([]byte("wrong data that is exactly one hundred bytes in length for testing"))
+
+	// Create wrong data
+	wrongData := make([]byte, 32)
+	for i := 0; i < 32; i++ {
+		wrongData[i] = byte((i + 100) % 256)
+	}
+	wrongHash := sha1.Sum(wrongData)
 
 	// Test with correct hash
-	m := NewManager(100, 100, [][20]byte{correctHash})
+	m := NewManager(32, 32, [][20]byte{correctHash})
 	err := m.ReceiveBlock(0, 0, data)
 	if err != nil {
 		t.Fatalf("ReceiveBlock failed: %v", err)
@@ -133,8 +142,7 @@ func TestVerifyPiece(t *testing.T) {
 	piece.mu.Unlock()
 
 	// Test with wrong hash
-	wrongData := []byte("wrong data that is exactly one hundred bytes in length for testing")
-	m2 := NewManager(100, 100, [][20]byte{wrongHash})
+	m2 := NewManager(32, 32, [][20]byte{wrongHash})
 	err = m2.ReceiveBlock(0, 0, data) // Send the original data but with wrong hash expectation
 	if err != nil {
 		t.Fatalf("ReceiveBlock failed: %v", err)
@@ -201,15 +209,15 @@ func TestPickPiece(t *testing.T) {
 
 // Test 6: IsComplete returns true when all verified
 func TestIsComplete(t *testing.T) {
-	data1 := []byte("piece one data")
-	data2 := []byte("piece two data")
+	data1 := []byte("0123456789abcdef") // 16 bytes
+	data2 := []byte("ghijklmnopqrstuv") // 16 bytes
 
 	hashes := [][20]byte{
 		sha1.Sum(data1),
 		sha1.Sum(data2),
 	}
 
-	m := NewManager(100, 200, hashes)
+	m := NewManager(16, 32, hashes)
 
 	// Initially not complete
 	if m.IsComplete() {
@@ -290,13 +298,18 @@ func TestConcurrentReceiveBlock(t *testing.T) {
 	numPieces := 10
 	hashes := make([][20]byte, numPieces)
 	pieceData := make([][]byte, numPieces)
+	pieceLen := 16
 
 	for i := 0; i < numPieces; i++ {
-		pieceData[i] = []byte("piece data " + string(rune('0'+i)))
+		// Create data of exact pieceLen bytes
+		pieceData[i] = make([]byte, pieceLen)
+		for j := 0; j < pieceLen; j++ {
+			pieceData[i][j] = byte((i*10 + j) % 256)
+		}
 		hashes[i] = sha1.Sum(pieceData[i])
 	}
 
-	m := NewManager(100, int64(numPieces*100), hashes)
+	m := NewManager(pieceLen, int64(numPieces*pieceLen), hashes)
 
 	var wg sync.WaitGroup
 	errors := make([]error, 0)
@@ -353,9 +366,9 @@ func TestMarkRequested(t *testing.T) {
 
 // Additional test: Downloaded returns correct count
 func TestDownloaded(t *testing.T) {
-	data1 := []byte("piece one data")
-	data2 := []byte("piece two data")
-	data3 := []byte("piece three data")
+	data1 := []byte("piece1data123456") // 16 bytes
+	data2 := []byte("piece2data123456") // 16 bytes
+	data3 := []byte("piece3data123456") // 16 bytes
 
 	hashes := [][20]byte{
 		sha1.Sum(data1),
@@ -363,7 +376,7 @@ func TestDownloaded(t *testing.T) {
 		sha1.Sum(data3),
 	}
 
-	m := NewManager(100, 300, hashes)
+	m := NewManager(16, 48, hashes)
 
 	if m.Downloaded() != 0 {
 		t.Errorf("expected 0 downloaded, got %d", m.Downloaded())

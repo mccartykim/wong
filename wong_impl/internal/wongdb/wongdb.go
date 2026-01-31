@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -31,6 +32,10 @@ const (
 type WongDB struct {
 	repoRoot string
 	jjBin    string
+	// dirtyFiles tracks .wong/ files written by this instance that haven't been
+	// synced yet. Keys are relative paths (e.g., ".wong/issues/bt-1.json").
+	// This is used to preserve pending changes across jj workspace update-stale.
+	dirtyFiles map[string][]byte
 }
 
 // Config represents .wong/config.yaml (stored as JSON for simplicity).
@@ -69,13 +74,39 @@ func (db *WongDB) jjCmd(ctx context.Context, args ...string) *exec.Cmd {
 
 // runJJ executes a jj command and returns its stdout output.
 // Returns an error wrapping stderr if the command fails.
+// If the command fails due to a stale working copy (common in multi-workspace
+// scenarios), it saves .wong/ files, runs `jj workspace update-stale`, restores
+// the .wong/ files, and retries the command once. This prevents update-stale
+// from overwriting pending .wong/ modifications.
 func (db *WongDB) runJJ(ctx context.Context, args ...string) (string, error) {
 	cmd := db.jjCmd(ctx, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("wongdb: jj %s: %w\n%s", strings.Join(args, " "), err, stderr.String())
+		errMsg := stderr.String()
+		// Auto-recover from stale working copy (don't retry update-stale itself)
+		if strings.Contains(errMsg, "working copy is stale") &&
+			!(len(args) >= 2 && args[0] == "workspace" && args[1] == "update-stale") {
+			updateCmd := db.jjCmd(ctx, "workspace", "update-stale")
+			updateCmd.Run() // best-effort
+
+			// Restore only files that THIS instance wrote (dirty files),
+			// which update-stale may have overwritten
+			if len(db.dirtyFiles) > 0 {
+				db.restoreWongFiles(db.dirtyFiles)
+			}
+
+			cmd2 := db.jjCmd(ctx, args...)
+			var stdout2, stderr2 bytes.Buffer
+			cmd2.Stdout = &stdout2
+			cmd2.Stderr = &stderr2
+			if err2 := cmd2.Run(); err2 != nil {
+				return "", fmt.Errorf("wongdb: jj %s: %w\n%s", strings.Join(args, " "), err2, stderr2.String())
+			}
+			return strings.TrimSpace(stdout2.String()), nil
+		}
+		return "", fmt.Errorf("wongdb: jj %s: %w\n%s", strings.Join(args, " "), err, errMsg)
 	}
 	return strings.TrimSpace(stdout.String()), nil
 }
@@ -210,10 +241,90 @@ func (db *WongDB) IsInitialized(ctx context.Context) bool {
 	return false
 }
 
+// canonicalRepoPath returns the path to the canonical .jj/repo directory.
+// For workspaces created with `jj workspace add`, the .jj/repo file is a text
+// file containing the path to the main repo's .jj/repo directory. For the main
+// workspace, .jj/repo is a directory itself.
+func (db *WongDB) canonicalRepoPath() string {
+	repoPath := filepath.Join(db.repoRoot, ".jj", "repo")
+	info, err := os.Stat(repoPath)
+	if err != nil {
+		return repoPath
+	}
+	if !info.IsDir() {
+		// Workspace: .jj/repo is a text file containing the canonical path
+		data, err := os.ReadFile(repoPath)
+		if err != nil {
+			return repoPath
+		}
+		return strings.TrimSpace(string(data))
+	}
+	return repoPath
+}
+
+// syncLockPath returns the path to the file lock used to serialize Sync operations
+// across multiple jj workspaces. The lock lives in the canonical .jj/repo/ directory
+// so all workspaces contend on the same lock.
+func (db *WongDB) syncLockPath() string {
+	return filepath.Join(db.canonicalRepoPath(), "wong-sync.lock")
+}
+
+// restoreWongFiles writes saved .wong/ file contents back to disk.
+func (db *WongDB) restoreWongFiles(files map[string][]byte) error {
+	for rel, data := range files {
+		fullPath := filepath.Join(db.repoRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(fullPath, data, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Sync atomically squashes .wong/ changes from the working copy into the wong-db change.
 // This is idempotent - it is a no-op if there are no .wong/ changes.
+//
+// For multi-workspace safety, Sync acquires an exclusive file lock so that only
+// one workspace squashes into wong-db at a time. This prevents bookmark conflicts
+// that occur when concurrent squash operations create divergent wong-db revisions.
+//
+// Important: jj workspace update-stale may overwrite on-disk files without
+// snapshotting pending changes first. To prevent data loss, Sync saves the
+// .wong/ file contents before update-stale and restores them afterward.
 func (db *WongDB) Sync(ctx context.Context) error {
-	_, err := db.runJJ(ctx, "squash", "--into", wongDBBookmark, wongDir+"/",
+	// Update stale working copy (needed when another workspace modified the repo)
+	db.runJJ(ctx, "workspace", "update-stale")
+
+	// Restore only dirty files (files written by this instance) that update-stale
+	// may have overwritten. This preserves our pending changes while accepting
+	// other workspaces' changes to wong-db.
+	if len(db.dirtyFiles) > 0 {
+		db.restoreWongFiles(db.dirtyFiles)
+	}
+
+	// Acquire exclusive file lock to serialize sync across workspaces
+	lockPath := db.syncLockPath()
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return fmt.Errorf("wongdb: failed to open sync lock %s: %w", lockPath, err)
+	}
+	defer lockFile.Close()
+
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("wongdb: failed to acquire sync lock: %w", err)
+	}
+	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+
+	// After acquiring lock, update stale again (the lock holder before us
+	// may have modified wong-db, making our working copy stale again)
+	db.runJJ(ctx, "workspace", "update-stale")
+	if len(db.dirtyFiles) > 0 {
+		db.restoreWongFiles(db.dirtyFiles)
+	}
+
+	_, err = db.runJJ(ctx, "squash", "--into", wongDBBookmark, wongDir+"/",
 		"-u", "--config", `revset-aliases."immutable_heads()"="none()"`)
 	if err != nil {
 		// Tolerate errors from no changes to squash
@@ -222,6 +333,9 @@ func (db *WongDB) Sync(ctx context.Context) error {
 		}
 		return fmt.Errorf("wongdb: sync failed: %w", err)
 	}
+
+	// Clear dirty files after successful sync
+	db.dirtyFiles = nil
 	return nil
 }
 
@@ -272,6 +386,13 @@ func (db *WongDB) WriteIssue(ctx context.Context, id string, data []byte) error 
 	if err := os.WriteFile(issuePath, data, 0o644); err != nil {
 		return fmt.Errorf("wongdb: failed to write issue %s: %w", id, err)
 	}
+
+	// Track this file as dirty so it survives update-stale
+	relPath := filepath.Join(wongIssuesDir, id+".json")
+	if db.dirtyFiles == nil {
+		db.dirtyFiles = make(map[string][]byte)
+	}
+	db.dirtyFiles[relPath] = append([]byte(nil), data...) // copy
 	return nil
 }
 
@@ -350,6 +471,9 @@ func (db *WongDB) Pull(ctx context.Context) error {
 // EnsureMergeParent ensures the current working copy has wong-db as a parent.
 // This is useful after Pull when the working copy might not have wong-db as a parent.
 func (db *WongDB) EnsureMergeParent(ctx context.Context) error {
+	// Update stale working copy first (needed in multi-workspace scenarios)
+	db.runJJ(ctx, "workspace", "update-stale")
+
 	// Check if wong-db is already a parent of @
 	output, err := db.runJJ(ctx, "log", "-r", "parents(@) & wong-db", "--no-graph", "-T", "change_id")
 	if err == nil && strings.TrimSpace(output) != "" {

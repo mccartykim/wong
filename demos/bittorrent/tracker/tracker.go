@@ -1,7 +1,6 @@
 package tracker
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -135,6 +134,17 @@ func Announce(ctx context.Context, req *AnnounceRequest) (*AnnounceResponse, err
 			for i := 0; i < len(v); i += 6 {
 				ip := net.IPv4(v[i], v[i+1], v[i+2], v[i+3])
 				port := binary.BigEndian.Uint16(v[i+4 : i+6])
+				peers = append(peers, Peer{IP: ip, Port: port})
+			}
+		case string:
+			// Compact format as string (bencode decodes byte strings as strings)
+			peersBytes := []byte(v)
+			if len(peersBytes)%6 != 0 {
+				return nil, fmt.Errorf("invalid compact peers format: length not multiple of 6")
+			}
+			for i := 0; i < len(peersBytes); i += 6 {
+				ip := net.IPv4(peersBytes[i], peersBytes[i+1], peersBytes[i+2], peersBytes[i+3])
+				port := binary.BigEndian.Uint16(peersBytes[i+4 : i+6])
 				peers = append(peers, Peer{IP: ip, Port: port})
 			}
 		case []interface{}:
