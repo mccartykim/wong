@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -32,6 +33,13 @@ const (
 type WongDB struct {
 	repoRoot string
 	jjBin    string
+
+	// mu protects dirtyFiles from concurrent access. This is needed because
+	// multiple goroutines may call WriteIssue() and Sync() on the same instance
+	// (e.g., in multi-agent scenarios sharing one WongDB). The file lock
+	// (syscall.Flock) only serializes across OS processes, not goroutines.
+	mu sync.Mutex
+
 	// dirtyFiles tracks .wong/ files written by this instance that haven't been
 	// synced yet. Keys are relative paths (e.g., ".wong/issues/bt-1.json").
 	// This is used to preserve pending changes across jj workspace update-stale.
@@ -93,8 +101,8 @@ func (db *WongDB) runJJ(ctx context.Context, args ...string) (string, error) {
 
 			// Restore only files that THIS instance wrote (dirty files),
 			// which update-stale may have overwritten
-			if len(db.dirtyFiles) > 0 {
-				db.restoreWongFiles(db.dirtyFiles)
+			if snap := db.snapshotDirtyFiles(); snap != nil {
+				db.restoreWongFiles(snap)
 			}
 
 			cmd2 := db.jjCmd(ctx, args...)
@@ -269,6 +277,21 @@ func (db *WongDB) syncLockPath() string {
 	return filepath.Join(db.canonicalRepoPath(), "wong-sync.lock")
 }
 
+// snapshotDirtyFiles returns a copy of the current dirtyFiles map under the mutex.
+// The caller can then pass the snapshot to restoreWongFiles without holding the lock.
+func (db *WongDB) snapshotDirtyFiles() map[string][]byte {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if len(db.dirtyFiles) == 0 {
+		return nil
+	}
+	snap := make(map[string][]byte, len(db.dirtyFiles))
+	for k, v := range db.dirtyFiles {
+		snap[k] = v
+	}
+	return snap
+}
+
 // restoreWongFiles writes saved .wong/ file contents back to disk.
 func (db *WongDB) restoreWongFiles(files map[string][]byte) error {
 	for rel, data := range files {
@@ -300,8 +323,8 @@ func (db *WongDB) Sync(ctx context.Context) error {
 	// Restore only dirty files (files written by this instance) that update-stale
 	// may have overwritten. This preserves our pending changes while accepting
 	// other workspaces' changes to wong-db.
-	if len(db.dirtyFiles) > 0 {
-		db.restoreWongFiles(db.dirtyFiles)
+	if snap := db.snapshotDirtyFiles(); snap != nil {
+		db.restoreWongFiles(snap)
 	}
 
 	// Acquire exclusive file lock to serialize sync across workspaces
@@ -320,8 +343,8 @@ func (db *WongDB) Sync(ctx context.Context) error {
 	// After acquiring lock, update stale again (the lock holder before us
 	// may have modified wong-db, making our working copy stale again)
 	db.runJJ(ctx, "workspace", "update-stale")
-	if len(db.dirtyFiles) > 0 {
-		db.restoreWongFiles(db.dirtyFiles)
+	if snap := db.snapshotDirtyFiles(); snap != nil {
+		db.restoreWongFiles(snap)
 	}
 
 	_, err = db.runJJ(ctx, "squash", "--into", wongDBBookmark, wongDir+"/",
@@ -335,7 +358,9 @@ func (db *WongDB) Sync(ctx context.Context) error {
 	}
 
 	// Clear dirty files after successful sync
+	db.mu.Lock()
 	db.dirtyFiles = nil
+	db.mu.Unlock()
 	return nil
 }
 
@@ -389,10 +414,12 @@ func (db *WongDB) WriteIssue(ctx context.Context, id string, data []byte) error 
 
 	// Track this file as dirty so it survives update-stale
 	relPath := filepath.Join(wongIssuesDir, id+".json")
+	db.mu.Lock()
 	if db.dirtyFiles == nil {
 		db.dirtyFiles = make(map[string][]byte)
 	}
 	db.dirtyFiles[relPath] = append([]byte(nil), data...) // copy
+	db.mu.Unlock()
 	return nil
 }
 

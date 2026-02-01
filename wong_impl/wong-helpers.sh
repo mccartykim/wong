@@ -24,7 +24,11 @@ _wong_lock_path() {
 }
 
 # Internal: squash .wong/ changes into wong-db with retry on stale WC
+# Usage: _wong_sync <pending_file> <pending_data>
+# Pass the file path and data as arguments (not globals) to avoid races.
 _wong_sync() {
+    local pending_file="${1:-}"
+    local pending_data="${2:-}"
     local lock_path
     lock_path="$(_wong_lock_path)"
     touch "$lock_path"
@@ -36,9 +40,9 @@ _wong_sync() {
 
         # Re-write any .wong/ files that were on disk before locking
         # (update-stale may have overwritten them)
-        if [ -n "${_WONG_PENDING_FILE:-}" ] && [ -n "${_WONG_PENDING_DATA:-}" ]; then
-            mkdir -p "$(dirname "$_WONG_PENDING_FILE")"
-            echo "$_WONG_PENDING_DATA" > "$_WONG_PENDING_FILE"
+        if [ -n "$pending_file" ] && [ -n "$pending_data" ]; then
+            mkdir -p "$(dirname "$pending_file")"
+            printf '%s\n' "$pending_data" > "$pending_file"
         fi
 
         local result
@@ -67,13 +71,10 @@ wong-write() {
     local file=".wong/issues/${id}.json"
 
     mkdir -p .wong/issues
-    echo "$json" > "$file"
+    printf '%s\n' "$json" > "$file"
 
-    # Set pending file info for restore after update-stale
-    _WONG_PENDING_FILE="$file"
-    _WONG_PENDING_DATA="$json"
-    _wong_sync
-    unset _WONG_PENDING_FILE _WONG_PENDING_DATA
+    # Pass file/data as arguments (not globals) to avoid races
+    _wong_sync "$file" "$json"
 }
 
 # wong-close <id> "reason" - Close an issue with a resolution note
@@ -88,11 +89,11 @@ wong-close() {
     }
 
     local updated
-    updated=$(echo "$current" | python3 -c "
-import sys, json
+    updated=$(echo "$current" | WONG_REASON="$reason" python3 -c "
+import sys, json, os
 d = json.load(sys.stdin)
 d['status'] = 'closed'
-d['resolution'] = '$reason'
+d['resolution'] = os.environ['WONG_REASON']
 print(json.dumps(d, indent=2))
 ") || {
         echo "wong-close: failed to update JSON for $id" >&2
@@ -110,14 +111,14 @@ wong-subtask() {
     local desc="${4:-}"
 
     local json
-    json=$(python3 -c "
-import json
+    json=$(WONG_ID="$id" WONG_TITLE="$title" WONG_PARENT="$parent" WONG_DESC="$desc" python3 -c "
+import json, os
 d = {
-    'id': '$id',
-    'title': '$title',
+    'id': os.environ['WONG_ID'],
+    'title': os.environ['WONG_TITLE'],
     'status': 'open',
-    'parent': '$parent',
-    'description': '''$desc'''
+    'parent': os.environ['WONG_PARENT'],
+    'description': os.environ['WONG_DESC']
 }
 print(json.dumps(d, indent=2))
 ")
