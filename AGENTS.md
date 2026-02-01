@@ -57,16 +57,16 @@ Priority order for remaining work:
 |----|---|--------|---------|
 | q1 | 0 | closed | dirtyFiles race - fixed with sync.Mutex |
 | q2 | 0 | closed | shell injection - fixed with os.environ |
-| q3 | 1 | open   | Fragile jj error string matching in wongdb.go |
-| q5 | 1 | open   | IsReady can't distinguish blocked vs missing dep |
-| q6 | 1 | open   | Add -race and corruption tests (unblocked, q1 done) |
+| q3 | 1 | closed | Fragile jj error string matching - fixed with prefix matching helpers |
+| q5 | 1 | closed | IsReady error semantics - fixed with CheckReady + partial LoadAllIssues |
+| q6 | 1 | closed | Race and corruption tests - added corruption_test.go with -race |
 | q4 | 1 | open   | Vec3 zero-div panics (demo code) |
 | q7 | 1 | open   | Bittorrent download loop incomplete (demo code) |
 | q9 | 2 | open   | Silent error suppression in helpers/Sync |
 | q8 | 2 | blocked | Agent code sharing (needs stacked-diffs epic) |
 | epic | 2 | open  | Stacked diffs workflow |
 
-Core infrastructure issues (q3, q5, q6) are higher priority than demo fixes (q4, q7).
+Remaining work is demo fixes (q4, q7) and P2 issues (q9, q8, epic).
 
 ## Key design decisions
 

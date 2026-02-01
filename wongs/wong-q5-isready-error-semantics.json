@@ -1,8 +1,9 @@
 {
   "id": "wong-q5-isready-error-semantics",
   "title": "IsReady returns false for both 'blocked' and 'dependency missing/corrupt' - no distinction",
-  "status": "open",
+  "status": "closed",
   "priority": 1,
   "description": "storage.go IsReady() returns (false, nil) in two different situations:\n1. Dependency exists but isn't closed yet (correct - not ready)\n2. Dependency issue can't be loaded at all (error - broken data)\n\nCallers can't tell the difference. A corrupted dependency issue blocks the dependent forever with no error signal.\n\nRelated: LoadAllIssues() fails entirely if one issue has bad JSON. Should support partial loads or skip-with-warning.\n\nFix: Return a typed error or a richer result (ready bool, blockers []string, errors []error) so callers can distinguish 'blocked by open dep' from 'blocked by missing/corrupt dep'.\n\nFile: wong_impl/internal/wongdb/storage.go lines 83-86, 46-61",
+  "close_reason": "Fixed: IsReady now returns an error when a dependency can't be loaded (instead of silent false). Added CheckReady() returning ReadyStatus with separate Blockers and Errors slices. LoadAllIssues now skips corrupt issues with a log warning instead of failing entirely.",
   "dependencies": []
 }

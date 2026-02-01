@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +18,32 @@ import (
 	"syscall"
 	"time"
 )
+
+// isStaleWorkingCopyError checks if a jj error indicates a stale working copy.
+// This uses a prefix match on the error message for specificity, rather than
+// a broad substring search that could match unrelated errors.
+func isStaleWorkingCopyError(stderr string) bool {
+	// jj prints "The working copy is stale" as the first line of stderr
+	// when the working copy is out of date relative to the operation log.
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "The working copy is stale") ||
+			strings.HasPrefix(line, "working copy is stale") {
+			return true
+		}
+	}
+	return false
+}
+
+// isNoChangesError checks if a jj error indicates there were no changes to
+// squash. This is not a real error for Sync - it just means the working copy
+// had no .wong/ modifications to persist.
+func isNoChangesError(errMsg string) bool {
+	// jj squash outputs "Nothing changed." when there are no file changes.
+	// Also check for "no changes to squash" which some jj versions use.
+	return strings.Contains(errMsg, "Nothing changed.") ||
+		strings.Contains(errMsg, "no changes to squash")
+}
 
 const (
 	// wongDir is the top-level directory for wong data in the working copy.
@@ -94,10 +121,12 @@ func (db *WongDB) runJJ(ctx context.Context, args ...string) (string, error) {
 	if err := cmd.Run(); err != nil {
 		errMsg := stderr.String()
 		// Auto-recover from stale working copy (don't retry update-stale itself)
-		if strings.Contains(errMsg, "working copy is stale") &&
+		if isStaleWorkingCopyError(errMsg) &&
 			!(len(args) >= 2 && args[0] == "workspace" && args[1] == "update-stale") {
 			updateCmd := db.jjCmd(ctx, "workspace", "update-stale")
-			updateCmd.Run() // best-effort
+			if updateErr := updateCmd.Run(); updateErr != nil {
+				log.Printf("wongdb: workspace update-stale failed: %v", updateErr)
+			}
 
 			// Restore only files that THIS instance wrote (dirty files),
 			// which update-stale may have overwritten
@@ -351,7 +380,7 @@ func (db *WongDB) Sync(ctx context.Context) error {
 		"-u", "--config", `revset-aliases."immutable_heads()"="none()"`)
 	if err != nil {
 		// Tolerate errors from no changes to squash
-		if strings.Contains(err.Error(), "Nothing changed") || strings.Contains(err.Error(), "no changes") {
+		if isNoChangesError(err.Error()) {
 			return nil
 		}
 		return fmt.Errorf("wongdb: sync failed: %w", err)

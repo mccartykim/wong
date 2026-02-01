@@ -1,8 +1,9 @@
 {
   "id": "wong-q3-error-string-matching",
   "title": "Fragile error detection: string matching on jj stderr for stale/no-changes",
-  "status": "open",
+  "status": "closed",
   "priority": 1,
   "description": "wongdb.go relies on strings.Contains to detect:\n- 'working copy is stale' (line 89) to trigger update-stale recovery\n- 'Nothing changed' / 'no changes' (lines 331-332) to tolerate empty syncs\n\nThese are brittle across jj versions and could have false positives on real errors that happen to contain those substrings.\n\nFix options:\n1. Check jj exit codes instead of stderr strings where possible\n2. Use more specific patterns (full error message prefix, not substring)\n3. Parse jj's structured output if available (jj has --config ui.paginate=never and some structured modes)\n4. Add integration tests that pin the expected error messages and break visibly when jj updates\n\nAlso: update-stale failure is silently ignored (line 92, 'best-effort' comment). Should at least log the failure.\n\nFile: wong_impl/internal/wongdb/wongdb.go lines 89, 92, 331-332",
+  "close_reason": "Fixed: extracted isStaleWorkingCopyError() with line-by-line prefix matching, isNoChangesError() with more specific patterns ('Nothing changed.' and 'no changes to squash'), and update-stale failure now logged via log.Printf instead of silently discarded.",
   "dependencies": []
 }
