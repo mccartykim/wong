@@ -52,7 +52,7 @@ func (d *Decorator) Run(ctx context.Context, args []string) error {
 	err := cmd.Run()
 
 	// If jj succeeded and this was a write command, sync wong-db.
-	if err == nil && d.isWriteCommand(subcmd) {
+	if err == nil && d.db != nil && d.isWriteCommand(subcmd) {
 		if syncErr := d.db.Sync(ctx); syncErr != nil {
 			fmt.Fprintf(os.Stderr, "wong: post-sync warning: %v\n", syncErr)
 		}

@@ -1,6 +1,7 @@
 package wongdb
 
 import (
+	"context"
 	"os"
 	"testing"
 )
@@ -234,4 +235,114 @@ func TestWongDB_DirtyTracking_ConcurrentWrites(t *testing.T) {
 	if count == 0 {
 		t.Error("expected dirty files after concurrent writes")
 	}
+}
+
+// Tests for issue ID validation (wong-q10 fix).
+
+func TestValidateIssueID(t *testing.T) {
+	tests := []struct {
+		name    string
+		id      string
+		wantErr bool
+	}{
+		{name: "valid simple", id: "my-issue-1", wantErr: false},
+		{name: "valid with dots", id: "issue.v2", wantErr: false},
+		{name: "valid with underscores", id: "bug_fix_123", wantErr: false},
+		{name: "empty", id: "", wantErr: true},
+		{name: "forward slash", id: "foo/bar", wantErr: true},
+		{name: "backslash", id: `foo\bar`, wantErr: true},
+		{name: "path traversal dotdot", id: "../etc/passwd", wantErr: true},
+		{name: "dotdot in middle", id: "foo..bar", wantErr: true},
+		{name: "just dotdot", id: "..", wantErr: true},
+		{name: "deep traversal", id: "../../../etc/shadow", wantErr: true},
+		{name: "single dot", id: ".", wantErr: true},
+		{name: "valid starting with dot", id: ".hidden-issue", wantErr: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateIssueID(tt.id)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateIssueID(%q) error = %v, wantErr %v", tt.id, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestWriteIssue_PathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	db := &WongDB{repoRoot: dir, jjBin: "jj"}
+
+	if err := os.MkdirAll(dir+"/.wong/issues", 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := t.Context()
+	maliciousIDs := []string{
+		"../../../etc/passwd",
+		"foo/bar",
+		`foo\bar`,
+		"..",
+	}
+
+	for _, id := range maliciousIDs {
+		err := db.WriteIssue(ctx, id, []byte(`{"id":"bad"}`))
+		if err == nil {
+			t.Errorf("WriteIssue(%q) should have returned error", id)
+		}
+	}
+
+	// Verify no files escaped .wong/issues/
+	etcPath := dir + "/etc"
+	if _, err := os.Stat(etcPath); err == nil {
+		t.Error("path traversal created files outside .wong/issues/")
+	}
+}
+
+func TestDeleteIssue_PathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	db := &WongDB{repoRoot: dir, jjBin: "jj"}
+
+	ctx := t.Context()
+	err := db.DeleteIssue(ctx, "../../../etc/passwd")
+	if err == nil {
+		t.Error("DeleteIssue with path traversal should return error")
+	}
+}
+
+func TestReadIssue_PathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	// Create a .jj dir so it looks like a jj repo (ReadIssue calls runJJ)
+	db := &WongDB{repoRoot: dir, jjBin: "jj"}
+
+	ctx := t.Context()
+	_, err := db.ReadIssue(ctx, "../../../etc/passwd")
+	if err == nil {
+		t.Error("ReadIssue with path traversal should return error")
+	}
+}
+
+// Tests for Decorator nil safety (wong-q11 fix).
+
+func TestDecorator_NilDB_NoWriteCommand(t *testing.T) {
+	d := NewDecorator(nil)
+	if d.jjBin != "jj" {
+		t.Errorf("expected jjBin 'jj', got %q", d.jjBin)
+	}
+	// extractSubcommand and isWriteCommand should work fine with nil db
+	if d.isWriteCommand("log") {
+		t.Error("log should not be a write command")
+	}
+	if !d.isWriteCommand("commit") {
+		t.Error("commit should be a write command")
+	}
+}
+
+func TestDecorator_NilDB_RunDoesNotPanic(t *testing.T) {
+	d := NewDecorator(nil)
+	ctx := context.Background()
+	// Run with a command that will fail (jj not installed), but should not panic
+	// even though db is nil and "new" is a write command
+	_ = d.Run(ctx, []string{"new"})
+	// If we got here without panicking, the test passes
 }

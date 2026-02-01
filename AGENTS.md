@@ -62,13 +62,13 @@ Priority order for remaining work:
 | q6 | 1 | closed | Race and corruption tests - added corruption_test.go with -race |
 | q4 | 1 | open   | Vec3 zero-div panics (demo code) |
 | q7 | 1 | open   | Bittorrent download loop incomplete (demo code) |
-| q10 | 0 | open  | Path traversal in issue IDs (security) |
-| q11 | 1 | open  | Decorator.Run() nil panic on write commands |
+| q10 | 0 | closed | Path traversal in issue IDs - fixed with validateIssueID() |
+| q11 | 1 | closed | Decorator nil panic - fixed with nil guard |
 | q9 | 2 | open   | Silent error suppression in helpers/Sync |
 | q8 | 2 | blocked | Agent code sharing (needs stacked-diffs epic) |
 | epic | 2 | open  | Stacked diffs workflow |
 
-q10 is P0 security. q11 is a straightforward nil guard. q4/q7 are demo code. q9/q8/epic are P2.
+Remaining: q4/q7 are demo code fixes. q9/q8/epic are P2.
 
 ## Key design decisions
 

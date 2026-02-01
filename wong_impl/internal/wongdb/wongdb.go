@@ -35,6 +35,24 @@ func isStaleWorkingCopyError(stderr string) bool {
 	return false
 }
 
+// validateIssueID checks that an issue ID is safe to use in file paths.
+// It rejects IDs that could cause path traversal or other filesystem issues.
+func validateIssueID(id string) error {
+	if id == "" {
+		return fmt.Errorf("wongdb: issue ID must not be empty")
+	}
+	if strings.Contains(id, "/") || strings.Contains(id, "\\") {
+		return fmt.Errorf("wongdb: issue ID %q contains path separator", id)
+	}
+	if strings.Contains(id, "..") {
+		return fmt.Errorf("wongdb: issue ID %q contains path traversal", id)
+	}
+	if id == "." {
+		return fmt.Errorf("wongdb: issue ID %q is invalid", id)
+	}
+	return nil
+}
+
 // isNoChangesError checks if a jj error indicates there were no changes to
 // squash. This is not a real error for Sync - it just means the working copy
 // had no .wong/ modifications to persist.
@@ -395,6 +413,9 @@ func (db *WongDB) Sync(ctx context.Context) error {
 
 // ReadIssue reads a single issue's raw JSON bytes from the wong-db change.
 func (db *WongDB) ReadIssue(ctx context.Context, id string) ([]byte, error) {
+	if err := validateIssueID(id); err != nil {
+		return nil, err
+	}
 	issuePath := filepath.Join(wongIssuesDir, id+".json")
 	output, err := db.runJJ(ctx, "file", "show", "-r", wongDBBookmark, issuePath)
 	if err != nil {
@@ -431,6 +452,9 @@ func (db *WongDB) ListIssueIDs(ctx context.Context) ([]string, error) {
 // WriteIssue writes an issue's raw JSON data to the working copy filesystem.
 // The caller should call Sync() afterward to persist the change to wong-db.
 func (db *WongDB) WriteIssue(ctx context.Context, id string, data []byte) error {
+	if err := validateIssueID(id); err != nil {
+		return err
+	}
 	issuesDir := filepath.Join(db.repoRoot, wongIssuesDir)
 	if err := os.MkdirAll(issuesDir, 0o755); err != nil {
 		return fmt.Errorf("wongdb: failed to create issues directory: %w", err)
@@ -455,6 +479,9 @@ func (db *WongDB) WriteIssue(ctx context.Context, id string, data []byte) error 
 // DeleteIssue removes an issue file from the working copy filesystem.
 // The caller should call Sync() afterward to persist the deletion to wong-db.
 func (db *WongDB) DeleteIssue(ctx context.Context, id string) error {
+	if err := validateIssueID(id); err != nil {
+		return err
+	}
 	issuePath := filepath.Join(db.repoRoot, wongIssuesDir, id+".json")
 	if err := os.Remove(issuePath); err != nil {
 		if os.IsNotExist(err) {

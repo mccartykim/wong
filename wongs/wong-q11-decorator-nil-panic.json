@@ -1,8 +1,9 @@
 {
   "id": "wong-q11-decorator-nil-panic",
   "title": "Decorator.Run() panics on nil db when jj command is a write operation",
-  "status": "open",
+  "status": "closed",
   "priority": 1,
-  "description": "NewDecorator() allows db to be nil (it checks `if db != nil && db.jjBin != \"\"` for the binary path). But Run() calls d.db.Sync(ctx) unconditionally for write commands, which panics with nil pointer dereference when db is nil.\n\nFix: Either guard the Sync call with `if d.db != nil`, or reject nil db in NewDecorator.\n\nFile: wong_impl/internal/wongdb/decorator.go lines 29-39 (NewDecorator), 56 (Sync call)",
+  "close_reason": "Fixed: added nil guard `d.db != nil` before calling Sync in Run(). Tests: TestDecorator_NilDB_NoWriteCommand, TestDecorator_NilDB_RunDoesNotPanic.",
+  "description": "NewDecorator() allows db to be nil but Run() calls d.db.Sync(ctx) unconditionally for write commands, causing nil pointer panic.\n\nFile: wong_impl/internal/wongdb/decorator.go lines 29-39, 56",
   "dependencies": []
 }

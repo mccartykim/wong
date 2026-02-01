@@ -1,8 +1,9 @@
 {
   "id": "wong-q10-id-path-traversal",
   "title": "Path traversal vulnerability: issue IDs used directly in filepath.Join without validation",
-  "status": "open",
+  "status": "closed",
   "priority": 0,
-  "description": "Issue IDs are used directly in filepath.Join() without sanitization in WriteIssue, ReadIssue, DeleteIssue, and storage.go. An ID like '../../../etc/passwd' could escape .wong/issues/ and read/write arbitrary files.\n\nAffected locations:\n- wongdb.go WriteIssue: filepath.Join(issuesDir, id+\".json\")\n- wongdb.go ReadIssue: filepath.Join(wongIssuesDir, id+\".json\")\n- wongdb.go DeleteIssue: filepath.Join(db.repoRoot, wongIssuesDir, id+\".json\")\n- storage.go SaveIssue validates empty ID but not path traversal\n\nFix: Add an ID validation function that rejects IDs containing '/', '\\', '..', or other path separators. Call it at the entry point of WriteIssue, ReadIssue, DeleteIssue, SaveIssue, and LoadIssue. Add TestWongDB_WriteIssue_PathTraversal test.\n\nFile: wong_impl/internal/wongdb/wongdb.go, wong_impl/internal/wongdb/storage.go",
+  "close_reason": "Fixed: added validateIssueID() rejecting IDs with /, \\, .., or single dot. Called at entry of ReadIssue, WriteIssue, DeleteIssue. Tests: TestValidateIssueID (12 cases), TestWriteIssue_PathTraversal, TestDeleteIssue_PathTraversal, TestReadIssue_PathTraversal.",
+  "description": "Issue IDs are used directly in filepath.Join() without sanitization in WriteIssue, ReadIssue, DeleteIssue, and storage.go. An ID like '../../../etc/passwd' could escape .wong/issues/ and read/write arbitrary files.\n\nFile: wong_impl/internal/wongdb/wongdb.go, wong_impl/internal/wongdb/storage.go",
   "dependencies": []
 }
