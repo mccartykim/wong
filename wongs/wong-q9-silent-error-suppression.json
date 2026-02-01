@@ -1,0 +1,8 @@
+{
+  "id": "wong-q9-silent-error-suppression",
+  "title": "Silent error suppression in wong-helpers.sh and Sync() update-stale",
+  "status": "open",
+  "priority": 2,
+  "description": "Multiple places silently swallow errors:\n\nwong-helpers.sh:\n- All 'jj workspace update-stale' calls end with '2>/dev/null || true' (lines 59, 130, 35)\n- _wong_sync error path only checks grep output, doesn't propagate jj failures\n\nwongdb.go:\n- update-stale in runJJ() is 'best-effort' with error ignored (line 92)\n- update-stale in Sync() ignores return value (lines 298, 322)\n- update-stale in EnsureMergeParent() ignores return value (line 475)\n\nIf update-stale fails (repo corruption, disk full, jj bug), every subsequent operation uses stale data and fails in confusing ways with no connection to the root cause.\n\nFix: Log update-stale failures even if we continue. In the Go code, at minimum log.Printf the error. In shell, redirect stderr to a log file rather than /dev/null.\n\nFiles: wong_impl/wong-helpers.sh lines 35, 59, 130; wong_impl/internal/wongdb/wongdb.go lines 92, 298, 322, 475",
+  "dependencies": []
+}

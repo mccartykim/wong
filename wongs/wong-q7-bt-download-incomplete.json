@@ -1,0 +1,8 @@
+{
+  "id": "wong-q7-bt-download-incomplete",
+  "title": "Bittorrent orchestrator download loop never receives piece data",
+  "status": "open",
+  "priority": 1,
+  "description": "demos/bittorrent-agent/download/orchestrator.go downloadLoop() sends requests to peers (SendRequest line 285) but immediately continues without waiting for or processing the response. handlePeerMessage() is empty (lines 234-236). Pieces are never received, verified, or written to disk.\n\nAlso:\n- Division by zero in progress reporter if total==0 (line 306)\n- Path traversal risk in piecemanager: string concat instead of filepath.Join (piecemanager.go line 73)\n- Broken directory creation: iterates runes not path segments (piecemanager.go lines 76-82)\n\nThis is a demo built by haiku agents - the code correctly implements the protocol types and structures but the integration layer (orchestrator) was the last piece and is incomplete. Fixing this would make the demo actually download files.\n\nFiles: demos/bittorrent-agent/download/orchestrator.go lines 234-291, 306; demos/bittorrent-agent/piecemanager/piecemanager.go lines 73, 76-82",
+  "dependencies": []
+}

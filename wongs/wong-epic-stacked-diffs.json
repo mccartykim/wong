@@ -1,0 +1,9 @@
+{
+  "id": "wong-epic-stacked-diffs",
+  "title": "Stacked diffs workflow: agents produce reviewable diff stacks with auto-rebase on main",
+  "status": "open",
+  "issue_type": "epic",
+  "priority": 2,
+  "description": "Agents should produce their work as stacked jj changes on a review branch rather than isolated workspace snapshots. The full workflow:\n\n1. Lead agent decomposes spec into wongs with dependency graph\n2. Sub-agents implement each wong, producing a jj change (the diff)\n3. Changes stack in dependency order (foundation at bottom, integration at top)\n4. Human reviews the stack top-to-bottom, can request changes on any layer\n5. Agent amends the specific change, jj auto-rebases everything above\n6. Once approved, stack gets squashed/merged into main\n\nWhen main moves forward (human commits, other agent merges):\n- Watcher detects main advancement, creates rebase wongs for outstanding stacks\n- Each rebase wong: rebase change X onto new main, run tests, report pass/fail\n- If tests fail after rebase, wong stays open for agent to fix\n- Stacked diff maintains review state - only rebased layers need re-review\n\nKey components:\n- Stack builder: converts wong dependency graph into ordered jj change stack\n- Review branch manager: pushes stacks to remote for human review\n- Main watcher: detects main advancement, triggers rebase wongs\n- Rebase agent: picks up rebase wongs, performs rebase, runs tests\n- Conflict resolver: if rebase has conflicts, creates fix wongs with context",
+  "dependencies": []
+}
