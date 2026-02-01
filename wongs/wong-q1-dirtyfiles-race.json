@@ -1,0 +1,9 @@
+{
+  "id": "wong-q1-dirtyfiles-race",
+  "title": "CRITICAL: dirtyFiles map has no mutex - race condition in concurrent WriteIssue/Sync",
+  "status": "closed",
+  "resolution": "Fixed in aa534d5: added sync.Mutex to WongDB, snapshotDirtyFiles() copy-under-lock helper. All dirtyFiles access sites protected. Verified with go test -race (0 warnings, all tests pass).",
+  "priority": 0,
+  "description": "wongdb.go WongDB.dirtyFiles is a map[string][]byte written by WriteIssue() and read/written by Sync() and runJJ() stale recovery with no synchronization.\n\nThe syscall.Flock file lock only serializes across OS processes (separate jj workspaces). Multiple goroutines calling WriteIssue() on the same WongDB instance race on the map.\n\nFix: Add sync.Mutex to WongDB struct, acquire in WriteIssue(), Sync(), and runJJ() stale recovery paths.\n\nFiles: wong_impl/internal/wongdb/wongdb.go lines 38, 96-98, 303-305, 323-325, 338, 392-395\n\nAlso add a go test -race run to CI or the test suite to catch this class of bug.",
+  "dependencies": []
+}

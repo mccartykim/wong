@@ -1,0 +1,9 @@
+{
+  "id": "wong-q2-shell-injection",
+  "title": "CRITICAL: wong-helpers.sh injects unescaped variables into Python strings",
+  "status": "closed",
+  "resolution": "Fixed in aa534d5: replaced Python string interpolation with os.environ[] in wong-close and wong-subtask. Eliminated global _WONG_PENDING_FILE/_WONG_PENDING_DATA by passing as args to _wong_sync. echo replaced with printf. 10-case integration test (test_shell_injection.sh) covers adversarial inputs.",
+  "priority": 0,
+  "description": "wong-close and wong-subtask pass shell variables directly into Python string literals:\n  d['resolution'] = '$reason'\n  'title': '$title'\n  'description': '''$desc'''\n\nSingle quotes, triple quotes, or backslashes in these values break the Python syntax or allow injection.\n\nFix: Pass values via environment variables and read with os.environ in Python, or pipe JSON through stdin instead of string interpolation.\n\nAlso: _WONG_PENDING_FILE/_WONG_PENDING_DATA are global shell variables set before flock is acquired (wong-helpers.sh line 73-76). Multiple concurrent shell processes overwrite each other's pending data.\n\nFix: Move the file write inside the flock subshell, or use a unique temp file per invocation.\n\nFile: wong_impl/wong-helpers.sh lines 91-96, 113-122, 73-76",
+  "dependencies": []
+}

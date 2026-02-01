@@ -1,0 +1,10 @@
+{
+  "id": "bt-7",
+  "title": "Download orchestrator",
+  "description": "Coordinate the full download: connect to tracker, get peers, manage peer connections, request pieces using rarest-first, handle choke/unchoke, write to disk. Package: download/",
+  "status": "open",
+  "priority": 2,
+  "issue_type": "task",
+  "created_at": "2026-01-31T06:17:15.130826+00:00",
+  "updated_at": "2026-01-31T06:17:15.130826+00:00"
+}

@@ -1,0 +1,8 @@
+{
+  "id": "wong-q4-vec3-zero-div",
+  "title": "Vec3.UnitVector and Camera.NewCamera panic on zero/degenerate inputs",
+  "status": "open",
+  "priority": 1,
+  "description": "vec3.go UnitVector() calls Scale(1.0 / Length()). Zero vector causes division by zero panic.\n\ncamera.go NewCamera() doesn't validate:\n- lookFrom == lookAt produces zero w vector -> panic in UnitVector\n- vUp parallel to (lookFrom - lookAt) produces zero Cross product -> panic\n\nFix: UnitVector should return zero vector (or error) for zero-length input. NewCamera should validate its inputs and return an error for degenerate configurations.\n\nFiles: demos/raytracer-agent/vec3.go line 59, demos/raytracer-agent/camera.go lines 27-35",
+  "dependencies": []
+}

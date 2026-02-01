@@ -1,0 +1,10 @@
+{
+  "id": "wong-q8-agent-code-sharing",
+  "title": "Agents can't share code across jj workspaces - need wong-prime or assembly protocol",
+  "status": "open",
+  "priority": 2,
+  "description": "Current problem: each agent workspace has its own working copy. When agent B depends on agent A's types (e.g., Vec3), there's no automated way to get A's code into B's workspace.\n\nWorkarounds used in demos:\n- Manual cp between workspace dirs (ray tracer: 'cp ws/agent-ray-1/raytracer/vec3.go ws/agent-ray-2/raytracer/')\n- Agent 6 independently re-implemented everything (bittorrent: bt-6 wrote its own bencode, metainfo, etc.)\n- bt-3 tried go mod imports across workspaces - doesn't work (separate go.mods)\n\nAll three approaches have problems. Need a proper solution:\n\nOption A: wong-prime command that pulls closed dependency code from wong-db snapshots or other workspaces\nOption B: Stacked diffs (the epic) where each agent's change builds on the previous one\nOption C: Shared Go module with replace directives pointing to workspace paths\nOption D: Assembly phase agent that merges workspace outputs into one module\n\nOption B (stacked diffs) is the right long-term answer - it naturally solves code sharing because each change in the stack sees all changes below it.",
+  "dependencies": [
+    {"issue_id": "wong-q8-agent-code-sharing", "depends_on_id": "wong-epic-stacked-diffs", "type": "blocks"}
+  ]
+}

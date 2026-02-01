@@ -1,0 +1,10 @@
+{
+  "id": "bt-2",
+  "title": "Torrent metainfo parser",
+  "description": "Parse .torrent files using the bencode package. Extract announce URL, piece length, piece hashes, file info (single and multi-file). Package: metainfo/",
+  "status": "open",
+  "priority": 2,
+  "issue_type": "task",
+  "created_at": "2026-01-31T06:17:15.130826+00:00",
+  "updated_at": "2026-01-31T06:17:15.130826+00:00"
+}

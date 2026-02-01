@@ -1,0 +1,4 @@
+bittorrent-agent
+bittorrent-client
+downloads/
+*.torrent

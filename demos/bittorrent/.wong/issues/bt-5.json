@@ -1,0 +1,10 @@
+{
+  "id": "bt-5",
+  "title": "Piece manager and verification",
+  "description": "Track which pieces we have/need, manage piece download state, verify completed pieces against SHA1 hashes from metainfo. Use crypto/sha1. Package: pieces/",
+  "status": "open",
+  "priority": 2,
+  "issue_type": "task",
+  "created_at": "2026-01-31T06:17:15.130826+00:00",
+  "updated_at": "2026-01-31T06:17:15.130826+00:00"
+}

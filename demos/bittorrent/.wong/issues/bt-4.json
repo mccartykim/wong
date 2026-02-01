@@ -1,0 +1,10 @@
+{
+  "id": "bt-4",
+  "title": "Peer wire protocol",
+  "description": "Implement the BitTorrent peer wire protocol over TCP. Handshake, keep-alive, choke/unchoke, interested/not-interested, have, bitfield, request, piece, cancel messages. Use net and encoding/binary only. Package: peer/",
+  "status": "open",
+  "priority": 2,
+  "issue_type": "task",
+  "created_at": "2026-01-31T06:17:15.130826+00:00",
+  "updated_at": "2026-01-31T06:17:15.130826+00:00"
+}
