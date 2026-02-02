@@ -64,11 +64,11 @@ Priority order for remaining work:
 | q7 | 1 | open   | Bittorrent download loop incomplete (demo code) |
 | q10 | 0 | closed | Path traversal in issue IDs - fixed with validateIssueID() |
 | q11 | 1 | closed | Decorator nil panic - fixed with nil guard |
-| q9 | 2 | open   | Silent error suppression in helpers/Sync |
+| q9 | 2 | closed | Silent error suppression - all errors now logged |
 | q8 | 2 | blocked | Agent code sharing (needs stacked-diffs epic) |
 | epic | 2 | open  | Stacked diffs workflow |
 
-Remaining: q4/q7 are demo code fixes. q9/q8/epic are P2.
+Remaining: q4/q7 are demo code fixes. q8 blocked on epic. Epic is design work.
 
 ## Key design decisions
 

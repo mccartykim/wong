@@ -149,7 +149,9 @@ func (db *WongDB) runJJ(ctx context.Context, args ...string) (string, error) {
 			// Restore only files that THIS instance wrote (dirty files),
 			// which update-stale may have overwritten
 			if snap := db.snapshotDirtyFiles(); snap != nil {
-				db.restoreWongFiles(snap)
+				if restoreErr := db.restoreWongFiles(snap); restoreErr != nil {
+					log.Printf("wongdb: failed to restore dirty files after update-stale: %v", restoreErr)
+				}
 			}
 
 			cmd2 := db.jjCmd(ctx, args...)
@@ -186,8 +188,10 @@ func (db *WongDB) Init(ctx context.Context) error {
 	// If it does, we need to preserve it. If empty (fresh repo), we can
 	// just create the merge working copy from scratch.
 	hasContent := false
-	existingFiles, _ := db.runJJ(ctx, "file", "list", "-r", "@")
-	if existingFiles != "" && strings.TrimSpace(existingFiles) != "" {
+	existingFiles, err := db.runJJ(ctx, "file", "list", "-r", "@")
+	if err != nil {
+		log.Printf("wongdb: init: failed to list files in @, assuming empty: %v", err)
+	} else if strings.TrimSpace(existingFiles) != "" {
 		hasContent = true
 	}
 
@@ -201,7 +205,10 @@ func (db *WongDB) Init(ctx context.Context) error {
 			return fmt.Errorf("wongdb: failed to snapshot current state: %w", err)
 		}
 		// Save the current change's commit ID (more stable than change ID for non-empty changes)
-		savedParents, _ = db.runJJ(ctx, "log", "-r", "@", "--no-graph", "-T", `commit_id`)
+		savedParents, err = db.runJJ(ctx, "log", "-r", "@", "--no-graph", "-T", `commit_id`)
+		if err != nil {
+			return fmt.Errorf("wongdb: failed to save parent commit ID: %w", err)
+		}
 	}
 
 	// Create wong-db change off root()
@@ -365,13 +372,17 @@ func (db *WongDB) restoreWongFiles(files map[string][]byte) error {
 // .wong/ file contents before update-stale and restores them afterward.
 func (db *WongDB) Sync(ctx context.Context) error {
 	// Update stale working copy (needed when another workspace modified the repo)
-	db.runJJ(ctx, "workspace", "update-stale")
+	if _, updateErr := db.runJJ(ctx, "workspace", "update-stale"); updateErr != nil {
+		log.Printf("wongdb: sync: pre-lock update-stale failed: %v", updateErr)
+	}
 
 	// Restore only dirty files (files written by this instance) that update-stale
 	// may have overwritten. This preserves our pending changes while accepting
 	// other workspaces' changes to wong-db.
 	if snap := db.snapshotDirtyFiles(); snap != nil {
-		db.restoreWongFiles(snap)
+		if restoreErr := db.restoreWongFiles(snap); restoreErr != nil {
+			log.Printf("wongdb: sync: pre-lock restore failed: %v", restoreErr)
+		}
 	}
 
 	// Acquire exclusive file lock to serialize sync across workspaces
@@ -389,9 +400,13 @@ func (db *WongDB) Sync(ctx context.Context) error {
 
 	// After acquiring lock, update stale again (the lock holder before us
 	// may have modified wong-db, making our working copy stale again)
-	db.runJJ(ctx, "workspace", "update-stale")
+	if _, updateErr := db.runJJ(ctx, "workspace", "update-stale"); updateErr != nil {
+		log.Printf("wongdb: sync: post-lock update-stale failed: %v", updateErr)
+	}
 	if snap := db.snapshotDirtyFiles(); snap != nil {
-		db.restoreWongFiles(snap)
+		if restoreErr := db.restoreWongFiles(snap); restoreErr != nil {
+			log.Printf("wongdb: sync: post-lock restore failed: %v", restoreErr)
+		}
 	}
 
 	_, err = db.runJJ(ctx, "squash", "--into", wongDBBookmark, wongDir+"/",
@@ -555,7 +570,9 @@ func (db *WongDB) Pull(ctx context.Context) error {
 // This is useful after Pull when the working copy might not have wong-db as a parent.
 func (db *WongDB) EnsureMergeParent(ctx context.Context) error {
 	// Update stale working copy first (needed in multi-workspace scenarios)
-	db.runJJ(ctx, "workspace", "update-stale")
+	if _, updateErr := db.runJJ(ctx, "workspace", "update-stale"); updateErr != nil {
+		log.Printf("wongdb: ensure-merge-parent: update-stale failed: %v", updateErr)
+	}
 
 	// Check if wong-db is already a parent of @
 	output, err := db.runJJ(ctx, "log", "-r", "parents(@) & wong-db", "--no-graph", "-T", "change_id")

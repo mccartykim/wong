@@ -36,7 +36,7 @@ _wong_sync() {
     (
         flock -x 200
         # Inside the lock: update-stale, restore files, squash
-        jj workspace update-stale 2>/dev/null || true
+        jj workspace update-stale 2>&1 || echo "wong-sync: update-stale failed (continuing)" >&2
 
         # Re-write any .wong/ files that were on disk before locking
         # (update-stale may have overwritten them)
@@ -60,7 +60,7 @@ _wong_sync() {
 # wong-read <id> - Read an issue from wong-db by ID
 wong-read() {
     local id="${1:?Usage: wong-read <issue-id>}"
-    jj workspace update-stale 2>/dev/null || true
+    jj workspace update-stale 2>&1 || echo "wong-read: update-stale failed (continuing)" >&2
     jj file show -r wong-db ".wong/issues/${id}.json" 2>/dev/null
 }
 
@@ -128,7 +128,7 @@ print(json.dumps(d, indent=2))
 
 # wong-list - List all issue IDs in wong-db
 wong-list() {
-    jj workspace update-stale 2>/dev/null || true
+    jj workspace update-stale 2>&1 || echo "wong-list: update-stale failed (continuing)" >&2
     jj file list -r wong-db 2>/dev/null | grep '.wong/issues/' | sed 's|.wong/issues/||;s|\.json||'
 }
 
