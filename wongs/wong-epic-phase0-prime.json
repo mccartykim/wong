@@ -1,0 +1,9 @@
+{
+  "id": "wong-epic-phase0-prime",
+  "title": "Phase 0: wong-prime - pull closed dependency code into current workspace",
+  "status": "open",
+  "issue_type": "task",
+  "priority": 2,
+  "description": "Add wong-prime command that copies a closed dependency's committed files into the current workspace. This is the minimum viable fix for q8 (agents can't share code).\n\nSteps:\n1. Add change_id and files fields to types.Issue\n2. Update wong-close to record change_id from jj log -r @ -T change_id\n3. Implement Prime(ctx, depID) in Go: verify closed, read change_id, jj file show each file\n4. Implement PrimeAll(ctx, issueID) in Go: prime all closed blocking deps\n5. Implement wong-prime and wong-prime-all in shell\n6. Unit tests (no jj) + integration tests (jj)\n\nSee wongs/EPIC-STACKED-DIFFS.md for full design.",
+  "dependencies": []
+}
