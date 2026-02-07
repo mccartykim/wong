@@ -7,13 +7,34 @@
 - **Overlay network**: 10.42.0.0/24
 - **CA**: `wong-testnet` (Curve25519, 1-year validity)
 
-## Results
+## Network Topology (the real constraint)
 
-### TUN device: blocked by sandbox
+All outbound traffic goes through a **JWT-authenticated HTTP CONNECT proxy** at
+`21.0.0.39:15004`. There is no direct internet access.
+
+| Protocol | Works? | Notes |
+|----------|--------|-------|
+| HTTPS (port 443) via CONNECT | **Yes** | TLS 1.3, full bidirectional data flow |
+| HTTP (port 80) via CONNECT | **Yes** | Data flows normally |
+| CONNECT to arbitrary ports | **Yes** (tunnel opens) | BUT proxy does protocol inspection |
+| Raw TCP through CONNECT | **No** | Non-HTTP/TLS traffic gets `400 Bad Request` |
+| Raw UDP (any port) | **No** | `sendto()` succeeds but packets are black-holed |
+| Raw TCP (bypassing proxy) | **No** | All timeouts - no direct internet |
+| DNS | **No** | `/etc/resolv.conf` is empty; proxy resolves hosts |
+
+**Key finding**: The CONNECT proxy opens tunnels to any host:port, but inspects
+the traffic flowing through. It only allows HTTP or TLS protocol frames. SSH
+banners, raw bytes, and other protocols get rejected with `400 Bad Request`.
+
+This means **Nebula (UDP-based) is completely dead for outbound connectivity**.
+Even if TUN worked, the UDP packets would never reach the internet.
+
+## Nebula Results (local)
+
+### TUN device: blocked by gVisor
 
 `/dev/net/tun` exists but the ioctl calls needed to configure it (set MTU, set
-tx queue length, bring interface up) are not supported by gVisor. This means
-Nebula **cannot create an overlay network interface** in this environment.
+tx queue length, bring interface up) are not supported by gVisor.
 
 ```
 level=error msg="Failed to set tun mtu" error="inappropriate ioctl for device"
@@ -21,60 +42,78 @@ level=error msg="Failed to set tun tx queue length" error="inappropriate ioctl f
 level=fatal msg="failed to bring the tun device up: inappropriate ioctl for device"
 ```
 
-### Headless mode (`tun.disabled: true`): works
+### Headless mode (`tun.disabled: true`): works locally
 
-Nebula runs stably with TUN disabled. It:
-- Binds to UDP port 4242
-- Loads certs and firewall rules correctly
-- Acts as a lighthouse / relay node
-- Shuts down cleanly on SIGTERM
-
-This means a Claude Code session **can run as a headless Nebula node** - it just
-can't route IP traffic through the overlay directly.
+Nebula runs stably with TUN disabled. It binds to UDP 4242 and acts as a
+lighthouse. But since outbound UDP is black-holed, it can't actually reach
+any peers on the internet.
 
 ### Bootstrap from env vars: works
 
-The `bootstrap.sh` script successfully reads `NEBULA_CA_CRT`, `NEBULA_HOST_CRT`,
-and `NEBULA_HOST_KEY` from environment variables, writes them to a temp dir, and
-starts Nebula. This is compatible with secrets-based provisioning.
+The `bootstrap.sh` script reads certs from env vars and starts Nebula.
+The pattern is reusable for any tunnel tool.
 
-## What this enables (with your machine as lighthouse)
+## Nebula's Userspace Networking
 
-If you run a lighthouse on your machine (with TUN enabled), and provide this
-session with a signed cert + the CA cert as secrets:
+Nebula does have a library/userspace networking mode used by the Defined
+Networking mobile apps (iOS/Android) where TUN isn't available or practical.
+This is in the `overlay` package. However, even with a userspace network stack,
+Nebula still needs outbound UDP, which is black-holed in this sandbox.
 
-1. **This session** runs Nebula headless (`tun.disabled: true`) connecting to
-   your lighthouse
-2. **Your machine** has TUN enabled and can see the session as a peer on the
-   overlay
-3. You could then use SSH port forwarding, SOCKS proxy, or similar to tunnel
-   select ports between the session and your machine
+## Virtualization & Containerization
 
-The catch: without TUN, this node can't originate or receive IP traffic on the
-overlay. Nebula's headless mode is designed for lighthouses that only facilitate
-peer discovery, not for actual data transfer.
+| Tool | Available? | Notes |
+|------|-----------|-------|
+| QEMU | No | Not installed, no `/dev/kvm` |
+| Docker | Binary exists | Daemon not running, can't start |
+| Podman/LXC | No | Not installed |
+| Nix | No | Not installed |
+| KVM | No | No `/dev/kvm` |
+| User namespaces | No | Not supported |
 
-### Alternative: userspace networking
+## What Actually Works for Tunneling
 
-For actual bidirectional tunneling without TUN, options include:
-- **Wireguard-go in userspace mode** (wireguard has a userspace TUN impl)
-- **Tailscale's `tsnet`** (embeds tailscale as a library, no TUN needed)
-- **Plain SSH reverse tunnels** (no overlay needed, just `ssh -R`)
-- **Cloudflare Tunnel / ngrok** (HTTP-level tunneling)
+Since only HTTPS through the CONNECT proxy works, viable approaches are:
 
-## Certificate revocation
+### 1. **Chisel** (recommended)
+- Go binary, tunnels TCP over WebSocket/HTTPS
+- You run `chisel server --reverse --port 443` on your machine
+- Session runs `chisel client https://your-host R:2222:localhost:22`
+- All traffic wraps in TLS through the CONNECT proxy
 
-Nebula has a `pki.blocklist` config field where you list certificate fingerprints
-to block. However:
-- The blocklist is **not distributed via lighthouses** - you must push it to all
-  nodes manually
-- `pki.disconnect_invalid: true` will disconnect hosts with expired/blocked certs
-- There is no CRL or OCSP equivalent
+### 2. **Cloudflare Tunnel** (`cloudflared`)
+- Uses HTTPS to Cloudflare edge
+- You run `cloudflared` on your machine exposing local services
+- Session accesses them via Cloudflare URLs through the proxy
+
+### 3. **SSH over TLS** (stunnel/HAProxy wrapping)
+- Wrap SSH in TLS on your server (port 443)
+- Session connects via CONNECT proxy to port 443
+- TLS unwraps to SSH on your end
+
+### 4. **Bore / Ngrok / Tailscale Funnel**
+- HTTP-based tunnel services
+- Work through the CONNECT proxy naturally
+
+### Certbot idea for agent cert issuance
+
+For your idea of a certbot at `certbot.kimb.dev`:
+- Agent presents a bearer token or SSH public key over HTTPS
+- Server issues a short-lived cert (e.g., chisel client cert, SSH cert)
+- Since HTTPS works fine through the proxy, this flow is viable
+- Short-lived certs (24h) mean revocation is mostly moot - just don't renew
+- For overlay IP reuse: new cert with same IP replaces the old holder
+
+## Certificate Revocation (Nebula)
+
+Nebula has `pki.blocklist` - list certificate fingerprints to block. However:
+- Blocklist is **not distributed via lighthouses** - push to all nodes manually
+- `pki.disconnect_invalid: true` disconnects hosts with expired/blocked certs
+- No CRL or OCSP equivalent
 - For rotation: issue new certs, add old fingerprints to blocklist, distribute
 
-For short-lived agent sessions, the simplest approach is to issue certs with
-short durations (e.g., `-duration 24h`) so they auto-expire. Combined with the
-blocklist for emergency revocation, this is workable.
+For short-lived agent sessions, issue certs with `-duration 24h` so they
+auto-expire. This is the practical approach for ephemeral environments.
 
 ## Files
 
