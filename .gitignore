@@ -86,3 +86,7 @@ wong_impl/Makefile
 wong_impl/THIRD_PARTY_LICENSES
 wong_impl/.gitattributes
 wong_impl/go.mod
+
+# Nebula testnet - never commit private keys
+nebula-testnet/*.key
+nebula-testnet/ca.key

@@ -1,0 +1,66 @@
+# Nebula testnet configuration - single lighthouse node
+# Overlay network: 10.42.0.0/24
+# This node: 10.42.0.1 (lighthouse)
+
+pki:
+  ca: /home/user/wong/nebula-testnet/ca.crt
+  cert: /home/user/wong/nebula-testnet/lighthouse.crt
+  key: /home/user/wong/nebula-testnet/lighthouse.key
+
+# This node IS the lighthouse
+lighthouse:
+  am_lighthouse: true
+  interval: 60
+
+# Listen on UDP for other nebula nodes to connect
+listen:
+  host: 0.0.0.0
+  port: 4242
+
+# Punchy helps with NAT traversal
+punchy:
+  punch: true
+  respond: true
+
+# TUN device configuration
+tun:
+  disabled: true
+  dev: nebula1
+  drop_local_broadcast: false
+  drop_multicast: false
+  tx_queue: 500
+  mtu: 1300
+
+# Logging
+logging:
+  level: info
+  format: text
+
+# Firewall rules for the overlay network
+firewall:
+  conntrack:
+    tcp_timeout: 12m
+    udp_timeout: 3m
+    default_timeout: 10m
+
+  outbound:
+    # Allow all outbound traffic on the overlay
+    - port: any
+      proto: any
+      host: any
+
+  inbound:
+    # Allow ICMP (ping) from anyone on the overlay
+    - port: any
+      proto: icmp
+      host: any
+
+    # Allow SSH from anyone on the overlay
+    - port: 22
+      proto: tcp
+      host: any
+
+    # Allow all traffic from nodes in the "testnet" group
+    - port: any
+      proto: any
+      group: testnet
